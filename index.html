@@ -5,14 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>PostFlow AI — LinkedIn Post Automator</title>
 
-  <!-- React + ReactDOM -->
   <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <!-- Babel for JSX in browser -->
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.2/babel.min.js"></script>
-  <!-- JSZip needed by PptxGenJS -->
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <!-- PptxGenJS v4 from jsDelivr (official CDN used in their own demos) -->
   <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.0/dist/pptxgen.bundle.js"></script>
 
   <style>
@@ -22,6 +18,7 @@
     @keyframes pfup{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
     @keyframes pfglow{0%,100%{box-shadow:0 0 0 0 rgba(10,102,194,.5)}50%{box-shadow:0 0 28px 8px rgba(10,102,194,.18)}}
     @keyframes pffl{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
     textarea,input,select{font-family:inherit}
   </style>
 </head>
@@ -31,9 +28,6 @@
 <script type="text/babel">
 const { useState } = React;
 
-/* ══════════════════════════════════════
-   DOMAINS
-══════════════════════════════════════ */
 const DOMAINS = [
   "Tech & AI","Data Science","Web Development","Product Management",
   "Business Strategy","Marketing & Growth","Finance & Investing",
@@ -41,9 +35,7 @@ const DOMAINS = [
   "UX & Design","DevOps & Cloud","Blockchain","Healthcare & MedTech",
 ];
 
-/* ══════════════════════════════════════
-   GEMINI TEXT
-══════════════════════════════════════ */
+/* ══ GEMINI TEXT ══ */
 async function aiText(prompt, key) {
   if (!key) throw new Error("Please save your Gemini API key first.");
   const res = await fetch(
@@ -56,109 +48,178 @@ async function aiText(prompt, key) {
   return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
-/* ══════════════════════════════════════
-   UNSPLASH IMAGE SEARCH — no API key needed!
-   Uses the free public access API (50 req/hr no key, or 5000/hr with free key)
-══════════════════════════════════════ */
-async function searchUnsplash(query, unsplashKey) {
-  // With key: uses Unsplash API. Without key: uses source.unsplash.com thumbnails
-  if (unsplashKey && unsplashKey.trim().length > 5) {
-    const res = await fetch(
-      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=9&orientation=landscape`,
-      { headers:{ Authorization: `Client-ID ${unsplashKey}` } }
-    );
-    const d = await res.json();
-    if (d.errors) throw new Error(d.errors[0]);
-    return (d.results||[]).map(p=>({
-      id: p.id,
-      thumb: p.urls.small,
-      full: p.urls.full,
-      download: p.links.download + "?force=true",
-      photographer: p.user.name,
-      profileUrl: p.user.links.html,
-    }));
-  } else {
-    // No key: generate a grid of Unsplash source URLs (always works, no auth)
-    const keywords = query.replace(/\s+/g,",");
-    return Array.from({length:9},(_,i)=>({
-      id: String(i),
-      thumb: `https://source.unsplash.com/400x250/?${keywords}&sig=${i}`,
-      full:  `https://source.unsplash.com/1600x900/?${keywords}&sig=${i}`,
-      download: `https://source.unsplash.com/1600x900/?${keywords}&sig=${i}`,
-      photographer: "Unsplash",
-      profileUrl: "https://unsplash.com",
-    }));
+/* ══ IMAGES: Pexels (with key) or Picsum (no key, always works) ══ */
+async function searchImages(query, pexelsKey) {
+  if (pexelsKey && pexelsKey.trim().length > 10) {
+    // Pexels API - free key, proper search
+    try {
+      const res = await fetch(
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=9&orientation=landscape`,
+        { headers:{ Authorization: pexelsKey.trim() } }
+      );
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      return (d.photos||[]).map(p=>({
+        thumb: p.src.medium,
+        full: p.src.large2x,
+        download: p.src.large2x,
+        credit: p.photographer,
+        creditUrl: p.photographer_url,
+        source: "Pexels",
+      }));
+    } catch(e) { /* fall through to Picsum */ }
   }
+  // Picsum Photos — completely free, no key, no auth, professional photos
+  const seed = encodeURIComponent(query);
+  return Array.from({length:9},(_,i)=>({
+    thumb: `https://picsum.photos/seed/${seed}${i}/400/250`,
+    full:  `https://picsum.photos/seed/${seed}${i}/1600/900`,
+    download: `https://picsum.photos/seed/${seed}${i}/1600/900`,
+    credit: "Picsum Photos",
+    creditUrl: "https://picsum.photos",
+    source: "Picsum",
+  }));
 }
 
-/* ══════════════════════════════════════
-   JSON PARSER
-══════════════════════════════════════ */
+/* ══ JSON PARSER ══ */
 function parseJSON(raw) {
   try { return JSON.parse(raw.replace(/```json|```/g,"").trim()); }
-  catch(e) {
-    // Try extracting JSON from within the text
+  catch {
     const m = raw.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
     if (m) try { return JSON.parse(m[0]); } catch {}
     return null;
   }
 }
 
-/* ══════════════════════════════════════
-   PPTX BUILDER — uses PptxGenJS v4
-══════════════════════════════════════ */
-async function buildPPTX(slides, title) {
+/* ══ ADVANCED PPTX BUILDER ══ */
+async function buildPPTX(slides, title, topic) {
   const Lib = window.PptxGenJS;
-  if (!Lib) throw new Error("PPT library not available. Please refresh the page.");
+  if (!Lib) throw new Error("PPT library not available. Please refresh and try again.");
   const pres = new Lib();
   pres.layout = "LAYOUT_16x9";
-  pres.title  = title;
-  const C = { dark:"0F172A", brand:"0A66C2", accent:"38BDF8", white:"FFFFFF", muted:"94A3B8", slate:"334155", light:"EFF6FF" };
+  pres.title = title;
+
+  // Color system
+  const C = {
+    navy:   "0A1628", darkBlue: "0F172A", brand:  "0A66C2",
+    bright: "2563EB", accent:  "38BDF8",  teal:   "0EA5E9",
+    white:  "FFFFFF", light:   "EFF6FF",  silver: "F1F5F9",
+    muted:  "94A3B8", slate:   "334155",  text:   "1E293B",
+    gold:   "F59E0B", green:   "10B981",  purple: "7C3AED",
+  };
 
   slides.forEach((s, i) => {
     const sl = pres.addSlide();
-    const isTitle = i===0, isLast = i===slides.length-1;
-    sl.background = { color: isTitle||isLast ? C.dark : C.white };
-    // Left blue bar
-    sl.addShape(pres.ShapeType.rect, { x:0, y:0, w:0.2, h:5.625, fill:{color:C.brand}, line:{color:C.brand,width:0} });
+    const isTitle = i === 0;
+    const isLast  = i === slides.length - 1;
 
+    // ── TITLE SLIDE (Slide 0) ──
     if (isTitle) {
-      sl.addShape(pres.ShapeType.ellipse, { x:6.8, y:-1.5, w:5.5, h:5.5, fill:{color:C.brand,transparency:88}, line:{color:C.brand,width:0} });
-      sl.addShape(pres.ShapeType.ellipse, { x:7.8, y:3, w:3, h:3, fill:{color:C.accent,transparency:88}, line:{color:C.accent,width:0} });
-      sl.addText("⚡ PostFlow AI", { x:0.38, y:0.25, w:2.4, h:0.42, fontSize:11, color:C.white, bold:true, align:"center", valign:"middle" });
-      sl.addText(title, { x:0.38, y:1.1, w:6.2, h:2.4, fontSize:30, color:C.white, bold:true, align:"left", valign:"middle" });
-      sl.addText(s.body||"A LinkedIn carousel", { x:0.38, y:3.65, w:6.2, h:0.7, fontSize:13, color:C.muted, align:"left" });
-      sl.addText("Made with PostFlow AI", { x:0.38, y:5.1, w:6, h:0.35, fontSize:9, color:"475569", align:"left" });
-    } else if (isLast) {
-      sl.addText("Key Takeaway", { x:0.38, y:0.55, w:9, h:0.4, fontSize:12, color:C.accent, bold:true, align:"left" });
-      sl.addText(s.heading||"", { x:0.38, y:1.05, w:8.8, h:1.6, fontSize:26, color:C.white, bold:true, align:"left" });
-      sl.addText(s.body||"", { x:0.38, y:2.8, w:7.5, h:1.5, fontSize:13, color:C.muted, align:"left" });
-      sl.addText("Follow for more →", { x:0.38, y:4.55, w:2.8, h:0.52, fontSize:13, color:C.dark, bold:true, align:"center", valign:"middle",
-        fill:{color:C.accent}, shape:pres.ShapeType.roundRect });
-    } else {
-      sl.addText(`${i}/${slides.length-1}`, { x:8.9, y:0.2, w:0.75, h:0.35, fontSize:9, color:C.white, bold:true, align:"center" });
-      sl.addText(s.label||`Point ${i}`, { x:0.38, y:0.28, w:8, h:0.38, fontSize:11, color:C.brand, bold:true, align:"left" });
-      sl.addText(s.heading||"", { x:0.38, y:0.72, w:8.5, h:1.0, fontSize:22, color:C.dark, bold:true, align:"left" });
-      sl.addText(s.body||"", { x:0.38, y:1.98, w:5.5, h:2.5, fontSize:12, color:C.slate, align:"left", valign:"top" });
-      // Right box
-      sl.addShape(pres.ShapeType.rect, { x:6.3, y:1.2, w:3.3, h:3.4, fill:{color:C.light}, line:{color:"CBD5E1",width:1} });
-      sl.addShape(pres.ShapeType.rect, { x:6.3, y:1.2, w:0.1, h:3.4, fill:{color:C.brand}, line:{color:C.brand,width:0} });
+      // Full dark gradient background
+      sl.background = { color: C.navy };
+      // Large decorative circles
+      sl.addShape(pres.ShapeType.ellipse, { x:-1.2, y:-1.2, w:5, h:5, fill:{color:C.brand,transparency:82}, line:{color:C.brand,width:0} });
+      sl.addShape(pres.ShapeType.ellipse, { x:7.5,  y:3.5,  w:4, h:4, fill:{color:C.accent,transparency:85}, line:{color:C.accent,width:0} });
+      sl.addShape(pres.ShapeType.ellipse, { x:5.5,  y:-0.8, w:2.5, h:2.5, fill:{color:C.teal,transparency:88}, line:{color:C.teal,width:0} });
+      // Top badge
+      sl.addShape(pres.ShapeType.roundRect, { x:0.55, y:0.35, w:2.6, h:0.45, fill:{color:C.brand}, rectRadius:0.12, line:{color:C.brand,width:0} });
+      sl.addText("⚡ PostFlow AI", { x:0.55, y:0.35, w:2.6, h:0.45, fontSize:11, color:C.white, bold:true, align:"center", valign:"middle" });
+      // Main title
+      sl.addText(title, { x:0.55, y:1.05, w:7.8, h:2.5, fontSize:34, color:C.white, bold:true, align:"left", valign:"middle",
+        shadow:{ type:"outer", color:"000000", blur:6, offset:2, angle:45, opacity:0.4 } });
+      // Subtitle line
+      sl.addShape(pres.ShapeType.rect, { x:0.55, y:3.7, w:1.6, h:0.055, fill:{color:C.accent}, line:{color:C.accent,width:0} });
+      sl.addText(s.body || "A LinkedIn Carousel", { x:0.55, y:3.85, w:7, h:0.55, fontSize:15, color:C.muted, align:"left" });
+      // Bottom bar
+      sl.addShape(pres.ShapeType.rect, { x:0, y:5.25, w:10, h:0.375, fill:{color:C.brand,transparency:70}, line:{color:C.brand,width:0} });
+      sl.addText("Made with PostFlow AI  |  postflow.ai", { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"left", valign:"middle" });
+      sl.addText(`${slides.length - 2} Key Insights`, { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"right", valign:"middle" });
+    }
+
+    // ── CONTENT SLIDES (Slides 1 to n-2) ──
+    else if (!isLast) {
+      const isEven = i % 2 === 0;
+
+      sl.background = { color: isEven ? C.silver : C.white };
+
+      // Top accent bar (full width, thin)
+      sl.addShape(pres.ShapeType.rect, { x:0, y:0, w:10, h:0.08, fill:{color:C.brand}, line:{color:C.brand,width:0} });
+
+      // Slide number pill (top right)
+      sl.addShape(pres.ShapeType.roundRect, { x:8.85, y:0.18, w:0.8, h:0.36, fill:{color:C.brand}, rectRadius:0.1, line:{color:C.brand,width:0} });
+      sl.addText(`${i} / ${slides.length - 2}`, { x:8.85, y:0.18, w:0.8, h:0.36, fontSize:9, color:C.white, bold:true, align:"center", valign:"middle" });
+
+      // Section label
+      sl.addText((s.label || `Insight ${i}`).toUpperCase(), { x:0.45, y:0.22, w:6, h:0.35, fontSize:10, color:C.brand, bold:true, align:"left", charSpacing:1.2 });
+
+      // Main heading
+      sl.addText(s.heading || "", { x:0.45, y:0.62, w:9.1, h:1.0, fontSize:24, color:C.darkBlue, bold:true, align:"left",
+        shadow:{ type:"outer", color:"000000", blur:3, offset:1, angle:45, opacity:0.15 } });
+
+      // Divider line
+      sl.addShape(pres.ShapeType.rect, { x:0.45, y:1.68, w:1.8, h:0.07, fill:{color:C.accent}, line:{color:C.accent,width:0} });
+
+      // Body text (left side)
+      sl.addText(s.body || "", { x:0.45, y:1.88, w:5.7, h:2.6, fontSize:13, color:C.slate, align:"left", valign:"top", lineSpacingMultiple:1.4 });
+
+      // Right panel (stat box or tip box)
       if (s.stat) {
-        sl.addText(s.stat, { x:6.45, y:1.7, w:3, h:0.9, fontSize:30, color:C.brand, bold:true, align:"center" });
-        sl.addText(s.statLabel||"", { x:6.45, y:2.65, w:3, h:0.8, fontSize:11, color:"64748B", align:"center" });
+        // Stat panel with gradient-like layering
+        sl.addShape(pres.ShapeType.roundRect, { x:6.45, y:1.1, w:3.15, h:3.8, fill:{color:C.brand}, rectRadius:0.18, line:{color:C.brand,width:0} });
+        sl.addShape(pres.ShapeType.roundRect, { x:6.55, y:1.2,  w:3.05, h:3.6, fill:{color:"0D3B6E",transparency:60}, rectRadius:0.15, line:{color:"0D3B6E",width:0} });
+        sl.addShape(pres.ShapeType.ellipse, { x:7.1, y:1.3, w:2, h:2, fill:{color:C.accent,transparency:88}, line:{color:C.accent,width:0} });
+        sl.addText("📊", { x:6.55, y:1.35, w:3, h:0.55, fontSize:22, align:"center", valign:"middle" });
+        sl.addText(s.stat, { x:6.55, y:1.95, w:3, h:1.1, fontSize:36, color:C.white, bold:true, align:"center" });
+        sl.addShape(pres.ShapeType.rect, { x:7.2, y:3.1, w:1.6, h:0.055, fill:{color:C.accent,transparency:40}, line:{color:C.accent,width:0} });
+        sl.addText(s.statLabel || "", { x:6.55, y:3.25, w:3, h:0.9, fontSize:11, color:"BBD4F0", align:"center", lineSpacingMultiple:1.35 });
       } else {
-        sl.addText("💡 Pro Tip", { x:6.45, y:1.5, w:3, h:0.38, fontSize:11, color:C.brand, bold:true, align:"left" });
-        sl.addText(s.tip||(s.body||"").slice(0,100), { x:6.45, y:1.95, w:3, h:2.3, fontSize:11, color:C.slate, align:"left", valign:"top" });
+        // Tip panel
+        sl.addShape(pres.ShapeType.roundRect, { x:6.45, y:1.1, w:3.15, h:3.8, fill:{color:C.light}, rectRadius:0.18, line:{color:"BFDBFE",width:1} });
+        sl.addShape(pres.ShapeType.roundRect, { x:6.45, y:1.1, w:3.15, h:0.7, fill:{color:C.brand}, rectRadius:0.18, line:{color:C.brand,width:0} });
+        sl.addShape(pres.ShapeType.rect, { x:6.45, y:1.6, w:3.15, h:0.2, fill:{color:C.brand}, line:{color:C.brand,width:0} });
+        sl.addText("💡  Pro Tip", { x:6.55, y:1.1, w:3, h:0.7, fontSize:12, color:C.white, bold:true, align:"center", valign:"middle" });
+        sl.addText(s.tip || (s.body||"").slice(0,130), { x:6.6, y:1.95, w:2.9, h:2.8, fontSize:12, color:C.slate, align:"left", valign:"top", lineSpacingMultiple:1.45 });
       }
-      sl.addText("PostFlow AI", { x:0.38, y:5.25, w:3, h:0.25, fontSize:8, color:C.muted, align:"left" });
+
+      // Bottom watermark
+      sl.addText("PostFlow AI", { x:0.45, y:5.32, w:3, h:0.2, fontSize:8, color:C.muted, align:"left" });
+
+      // Key takeaway box at bottom
+      if (s.takeaway) {
+        sl.addShape(pres.ShapeType.roundRect, { x:0.45, y:4.7, w:5.7, h:0.55, fill:{color:C.light}, rectRadius:0.1, line:{color:"BFDBFE",width:1} });
+        sl.addText(`⭐ ${s.takeaway}`, { x:0.55, y:4.7, w:5.5, h:0.55, fontSize:11, color:C.brand, bold:true, align:"left", valign:"middle" });
+      }
+    }
+
+    // ── CTA / FINAL SLIDE ──
+    else {
+      sl.background = { color: C.navy };
+      // Decorative shapes
+      sl.addShape(pres.ShapeType.ellipse, { x:6.5,  y:-0.5, w:5,   h:5,   fill:{color:C.brand,transparency:85}, line:{color:C.brand,width:0} });
+      sl.addShape(pres.ShapeType.ellipse, { x:-0.5, y:3.5,  w:3.5, h:3.5, fill:{color:C.accent,transparency:88}, line:{color:C.accent,width:0} });
+      sl.addShape(pres.ShapeType.ellipse, { x:8.5,  y:3.8,  w:2,   h:2,   fill:{color:C.teal,transparency:88}, line:{color:C.teal,width:0} });
+      // Top label
+      sl.addText("KEY TAKEAWAY", { x:0.55, y:0.45, w:9, h:0.38, fontSize:11, color:C.accent, bold:true, align:"left", charSpacing:2 });
+      // Main heading
+      sl.addText(s.heading || "", { x:0.55, y:0.95, w:8.5, h:2.0, fontSize:28, color:C.white, bold:true, align:"left",
+        shadow:{ type:"outer", color:"000000", blur:6, offset:2, angle:45, opacity:0.4 } });
+      // Divider
+      sl.addShape(pres.ShapeType.rect, { x:0.55, y:3.05, w:2.2, h:0.07, fill:{color:C.accent}, line:{color:C.accent,width:0} });
+      // Body
+      sl.addText(s.body || "", { x:0.55, y:3.25, w:7, h:1.2, fontSize:13, color:C.muted, align:"left", lineSpacingMultiple:1.4 });
+      // CTA Button
+      sl.addShape(pres.ShapeType.roundRect, { x:0.55, y:4.65, w:3.2, h:0.65, fill:{color:C.accent}, rectRadius:0.14, line:{color:C.accent,width:0} });
+      sl.addText("Follow for more insights →", { x:0.55, y:4.65, w:3.2, h:0.65, fontSize:13, color:C.navy, bold:true, align:"center", valign:"middle" });
+      // Bottom
+      sl.addShape(pres.ShapeType.rect, { x:0, y:5.25, w:10, h:0.375, fill:{color:C.brand,transparency:70}, line:{color:C.brand,width:0} });
+      sl.addText("PostFlow AI  |  Made for LinkedIn Creators", { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"left", valign:"middle" });
     }
   });
+
   return await pres.write({ outputType:"blob" });
 }
 
-/* ══════════════════════════════════════
-   UI HELPERS
-══════════════════════════════════════ */
+/* ══ UI HELPERS ══ */
 function Spin({color="#fff"}) {
   return <span style={{display:"inline-flex",gap:3,alignItems:"center"}}>
     {[0,.15,.3].map((d,i)=><span key={i} style={{width:5,height:5,borderRadius:"50%",background:color,display:"inline-block",animation:`pfdot 1.2s ${d}s infinite ease-in-out`}}/>)}
@@ -169,9 +230,7 @@ function Notice({type="info",children}) {
   return <div style={{background:s.bg,border:`1px solid ${s.b}`,color:s.c,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:500,marginTop:10,lineHeight:1.55}}>{children}</div>;
 }
 
-/* ══════════════════════════════════════
-   LANDING
-══════════════════════════════════════ */
+/* ══ LANDING ══ */
 function Landing({onLaunch}) {
   return (
     <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:"#0A0F1E",minHeight:"100vh",color:"#F0F4FF"}}>
@@ -179,11 +238,9 @@ function Landing({onLaunch}) {
         .lcta{background:linear-gradient(135deg,#0A66C2,#0284C7);color:#fff;border:none;padding:15px 40px;border-radius:50px;font-size:16px;font-weight:800;cursor:pointer;animation:pfglow 3s infinite;transition:transform .2s}.lcta:hover{transform:scale(1.03)}
         .lsec{background:transparent;color:#38BDF8;border:1.5px solid #38BDF8;padding:8px 22px;border-radius:50px;font-size:13px;font-weight:700;cursor:pointer}.lsec:hover{background:rgba(56,189,248,.1)}
         .lfc{transition:all .2s;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:22px}.lfc:hover{transform:translateY(-4px);border-color:rgba(56,189,248,.35)!important}
-        .lmock{animation:pffl 4s ease-in-out infinite}
         .u1{animation:pfup .5s .05s both}.u2{animation:pfup .5s .15s both}.u3{animation:pfup .5s .25s both}.u4{animation:pfup .5s .35s both}
       `}</style>
       <div style={{position:"fixed",inset:0,background:"radial-gradient(ellipse 80% 50% at 50% -10%,rgba(10,102,194,.2) 0%,transparent 60%)",pointerEvents:"none"}}/>
-      {/* Nav */}
       <div style={{position:"sticky",top:0,zIndex:100,background:"rgba(10,15,30,.9)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,.06)",padding:"14px 32px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:900,fontSize:18}}>⚡ PostFlow <span style={{color:"#38BDF8"}}>AI</span></div>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
@@ -191,7 +248,6 @@ function Landing({onLaunch}) {
           <button className="lsec" onClick={onLaunch}>Launch App →</button>
         </div>
       </div>
-      {/* Hero */}
       <div style={{textAlign:"center",padding:"80px 24px 56px"}}>
         <div className="u1" style={{marginBottom:16}}><span style={{background:"rgba(245,158,11,.12)",color:"#F59E0B",fontSize:12,fontWeight:700,padding:"4px 14px",borderRadius:20}}>🚀 Built for LinkedIn Creators · 100% Free</span></div>
         <h1 className="u2" style={{fontSize:"clamp(34px,6vw,62px)",fontWeight:900,margin:"14px 0 18px",lineHeight:1.06,letterSpacing:"-2px"}}>
@@ -199,50 +255,66 @@ function Landing({onLaunch}) {
           <span style={{background:"linear-gradient(135deg,#38BDF8,#0A66C2)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>viral LinkedIn post</span>
           <br/>in 3 minutes
         </h1>
-        <p className="u3" style={{fontSize:17,color:"#94A3B8",maxWidth:490,margin:"0 auto 34px",lineHeight:1.65}}>Topic research · Storytelling drafts · Carousel PPT · Free stock photos<br/>No signup. Only needs a free Gemini key.</p>
+        <p className="u3" style={{fontSize:17,color:"#94A3B8",maxWidth:520,margin:"0 auto 34px",lineHeight:1.65}}>
+          Topic research · Storytelling drafts · Advanced carousel PPT · Free stock photos<br/>
+          Paste your own draft — or let AI write from scratch.
+        </p>
         <div className="u4">
           <button className="lcta" onClick={onLaunch}>Start Creating Free →</button>
-          <div style={{marginTop:12,fontSize:12,color:"#475569"}}>No credit card · Works in your browser</div>
+          <div style={{marginTop:12,fontSize:12,color:"#475569"}}>No credit card · Works in your browser · Only needs a free Gemini key</div>
         </div>
       </div>
-      {/* Features */}
       <div style={{maxWidth:900,margin:"0 auto 70px",padding:"0 24px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16}}>
-        {[["🔥","Trending Topics","AI suggests 6 ideas per niche, or type your own"],["✍️","Storytelling Posts","Hook → story → lessons → CTA format that gets engagement"],["📊","PPT Carousel","Real branded .pptx file, download and post on LinkedIn"],["🖼️","Free Stock Photos","Unsplash photos — no API key needed. Just search & download"],["🔑","Your Key, Your Data","Free Gemini key. Nothing stored on our servers"],["🚀","One-File Deploy","Single HTML. Upload to Vercel. Share your link. Done"]].map(([ic,t,d])=>(
+        {[
+          ["🔥","Trending Topics","AI suggests 6 ideas per niche, or bring your own draft"],
+          ["✍️","Storytelling Posts","Hook → story → lessons → CTA. Edit with AI in one click"],
+          ["📊","Advanced PPT Carousel","Pro-grade branded slides with stats, tips, gradients"],
+          ["🖼️","Free Stock Photos","Picsum Photos — zero API key. Or add Pexels for real search"],
+          ["🔑","Your Key, Your Data","Free Gemini key. Nothing stored on any server"],
+          ["🚀","One-File Deploy","Single HTML → Vercel → live site in 5 minutes"],
+        ].map(([ic,t,d])=>(
           <div key={t} className="lfc"><div style={{fontSize:28,marginBottom:10}}>{ic}</div><div style={{fontWeight:800,fontSize:14,marginBottom:5,color:"#E2E8F0"}}>{t}</div><div style={{color:"#64748B",fontSize:13,lineHeight:1.55}}>{d}</div></div>
         ))}
       </div>
       <div style={{textAlign:"center",borderTop:"1px solid rgba(255,255,255,.06)",padding:"44px 24px"}}>
-        <h2 style={{fontSize:26,fontWeight:900,marginBottom:10}}>Ready to grow your LinkedIn?</h2>
-        <button className="lcta" onClick={onLaunch} style={{marginTop:16}}>Open PostFlow AI →</button>
+        <button className="lcta" onClick={onLaunch}>Open PostFlow AI →</button>
         <div style={{marginTop:20,fontSize:12,color:"#334155"}}>Built by <strong style={{color:"#38BDF8"}}>PostFlow AI</strong></div>
       </div>
     </div>
   );
 }
 
-/* ══════════════════════════════════════
-   MAIN TOOL
-══════════════════════════════════════ */
+/* ══ MAIN TOOL ══ */
 function Tool({onHome}) {
-  const [geminiKey, setGeminiKey] = useState(()=>localStorage.getItem("pf_gkey")||"");
-  const [keysSaved, setKeysSaved] = useState(()=>!!localStorage.getItem("pf_gkey"));
-  const [showKey,   setShowKey]   = useState(false);
-  const [unsplashKey, setUnsplashKey] = useState(()=>localStorage.getItem("pf_ukey")||"");
+  // Keys
+  const [geminiKey,  setGeminiKey]  = useState(()=>localStorage.getItem("pf_gkey")||"");
+  const [pexelsKey,  setPexelsKey]  = useState(()=>localStorage.getItem("pf_pkey")||"");
+  const [keysSaved,  setKeysSaved]  = useState(()=>!!localStorage.getItem("pf_gkey"));
+  const [showKey,    setShowKey]    = useState(false);
 
-  const [domain,   setDomain]   = useState("");
-  const [custom,   setCustom]   = useState("");
-  const [topics,   setTopics]   = useState([]);
-  const [selected, setSelected] = useState(null);
+  // Idea / draft input
+  const [userDraft,  setUserDraft]  = useState(""); // user's own draft or idea
 
-  const [post,     setPost]     = useState("");
-  const [tags,     setTags]     = useState("");
+  // Topic flow
+  const [domain,     setDomain]     = useState("");
+  const [custom,     setCustom]     = useState("");
+  const [topics,     setTopics]     = useState([]);
+  const [selected,   setSelected]   = useState(null);
 
-  const [pptSlides,setPptSlides]= useState(null);
-  const [pptBlob,  setPptBlob]  = useState(null);
+  // Post
+  const [post,       setPost]       = useState("");
+  const [tags,       setTags]       = useState("");
+  const [changeReq,  setChangeReq]  = useState(""); // user's change request
+  const [showChange, setShowChange] = useState(false);
 
-  const [photos,   setPhotos]   = useState([]);
-  const [pickedImg,setPickedImg]= useState(null);
-  const [imgQuery, setImgQuery] = useState("");
+  // PPT
+  const [pptSlides,  setPptSlides]  = useState(null);
+  const [pptBlob,    setPptBlob]    = useState(null);
+
+  // Images
+  const [photos,     setPhotos]     = useState([]);
+  const [pickedImg,  setPickedImg]  = useState(null);
+  const [imgQuery,   setImgQuery]   = useState("");
 
   const [step,  setStep]  = useState(1);
   const [busy,  setBusy]  = useState({});
@@ -255,26 +327,33 @@ function Tool({onHome}) {
   function saveKeys() {
     if (!geminiKey.trim()||geminiKey.trim().length<10){sm("keys","⚠️ Enter a valid Gemini key (starts with AIza...)");return;}
     localStorage.setItem("pf_gkey",geminiKey.trim());
-    if(unsplashKey.trim()) localStorage.setItem("pf_ukey",unsplashKey.trim());
+    if(pexelsKey.trim()) localStorage.setItem("pf_pkey",pexelsKey.trim());
     setKeysSaved(true);
     sm("keys","✅ Saved! Ready to create.");
   }
 
-  async function getTopics(){
-    if(!domain&&!custom.trim()){sm("topics","⚠️ Choose a domain or type a topic.");return;}
+  async function getTopics() {
+    if (!domain&&!custom.trim()){sm("topics","⚠️ Choose a domain or type a topic.");return;}
     sb("topics",true);sm("topics","");
-    try{
-      const ctx=custom.trim()?`Custom topic: "${custom}"`:`Domain: "${domain}"`;
-      const raw=await aiText(`Generate 6 trending LinkedIn post ideas for ${ctx}.\nReturn ONLY a JSON array, no markdown:\n[{"title":"...","hook":"...","why":"...","emoji":"...","angle":"..."}]`,geminiKey);
-      const parsed=parseJSON(raw);
+    try {
+      // Include user draft/idea as extra context if provided
+      const draftCtx = userDraft.trim()
+        ? `\n\nThe user has provided this draft or idea as starting context — use it to make suggestions more relevant:\n"""\n${userDraft.trim()}\n"""`
+        : "";
+      const ctx = custom.trim() ? `Custom topic: "${custom}"` : `Domain: "${domain}"`;
+      const raw = await aiText(
+        `Generate 6 trending, high-engagement LinkedIn post ideas for ${ctx}.${draftCtx}\nReturn ONLY a JSON array, no markdown:\n[{"title":"...","hook":"...","why":"...","emoji":"...","angle":"..."}]`,
+        geminiKey
+      );
+      const parsed = parseJSON(raw);
       if(parsed&&parsed.length){setTopics(parsed);setStep(2);sm("topics","");}
       else sm("topics","⚠️ Could not read response — please try again.");
-    }catch(e){sm("topics",`❌ ${e.message}`);}
+    } catch(e){sm("topics",`❌ ${e.message}`);}
     sb("topics",false);
   }
 
   function pick(t){
-    setSelected(t);setPost("");setTags("");setPptSlides(null);setPptBlob(null);setPhotos([]);setPickedImg(null);
+    setSelected(t);setPost("");setTags("");setPptSlides(null);setPptBlob(null);setPhotos([]);setPickedImg(null);setShowChange(false);setChangeReq("");
   }
   function useDirect(){
     if(!custom.trim())return;
@@ -282,35 +361,71 @@ function Tool({onHome}) {
     setTopics([]);setStep(2);
   }
 
-  async function draftPost(){
-    if(!selected)return;
+  // Draft from user's own draft/idea OR from selected topic
+  async function draftPost(isRefinement=false){
+    if(!selected&&!userDraft.trim()&&!isRefinement)return;
     sb("post",true);sm("post","");
-    try{
-      const[p,t]=await Promise.all([
-        aiText(`Write a LinkedIn post about: "${selected.title}" (angle: ${selected.angle||"storytelling"}).\nFormat rules:\n1. One bold punchy hook line\n2. 2-3 sentences of personal story/insight\n3. Exactly 3 numbered lessons\n4. Soft CTA (not salesy)\nLength: 180-240 words. Conversational, first person. Blank line between each section.`,geminiKey),
-        aiText(`Give exactly 5 LinkedIn hashtags for: "${selected.title}". Return ONLY hashtags separated by spaces, nothing else.`,geminiKey),
+    try {
+      let prompt;
+      if (isRefinement && changeReq.trim()) {
+        // AI refine based on user's change request
+        prompt = `You previously wrote this LinkedIn post:\n"""\n${post}\n"""\n\nThe user wants these changes: "${changeReq.trim()}"\n\nRewrite the post applying those changes. Keep the same storytelling format (hook → story → lessons → CTA). Return ONLY the updated post text, no explanation.`;
+      } else if (userDraft.trim() && (!selected || selected.angle==="custom")) {
+        // Polish/enhance the user's own draft
+        prompt = `The user has provided this LinkedIn post draft or idea:\n"""\n${userDraft.trim()}\n"""\n\nEnhance and polish it into a full viral LinkedIn post using this format:\n1. One bold punchy hook line (keep or improve theirs)\n2. 2-3 sentences of personal story/insight\n3. Exactly 3 numbered lessons or tips\n4. Soft CTA (not salesy)\n\nLength: 180-240 words. Conversational, first person. Blank line between each section.\nReturn ONLY the post text, no explanation.`;
+      } else {
+        // Normal topic-based draft
+        const draftCtx = userDraft.trim()
+          ? `\n\nAdditional context from the user:\n"""\n${userDraft.trim()}\n"""`
+          : "";
+        prompt = `Write a LinkedIn post about: "${selected.title}" (angle: ${selected.angle||"storytelling"}).${draftCtx}\nFormat:\n1. One bold punchy hook line\n2. 2-3 sentences personal story/insight\n3. Exactly 3 numbered lessons\n4. Soft CTA (not salesy)\nLength: 180-240 words. Conversational, first person. Blank line between sections.`;
+      }
+
+      const [p, t] = await Promise.all([
+        aiText(prompt, geminiKey),
+        tags ? Promise.resolve(tags) : aiText(`Give exactly 5 LinkedIn hashtags for: "${selected?.title || 'LinkedIn content'}". Return ONLY hashtags separated by spaces, nothing else.`, geminiKey),
       ]);
-      setPost(p);setTags(t.trim());
-      setImgQuery(selected.title);
+      setPost(p); setTags(t.trim());
+      setImgQuery(selected?.title || (userDraft.trim().slice(0,40)) || "professional");
+      setShowChange(false); setChangeReq("");
       setStep(3);
-    }catch(e){sm("post",`❌ ${e.message}`);}
+    } catch(e){sm("post",`❌ ${e.message}`);}
+    sb("post",false);
+  }
+
+  async function draftFromOwnIdea() {
+    if (!userDraft.trim()) { sm("draft","⚠️ Please write your idea or draft in the box above first."); return; }
+    pick({ title: userDraft.trim().slice(0,60), hook:"Your draft", why:"Your idea", emoji:"✍️", angle:"own-draft" });
+    setTopics([]); setStep(2);
+    // immediately draft
+    sb("post",true); sm("post","");
+    try {
+      const [p,t] = await Promise.all([
+        aiText(`The user has provided this LinkedIn post draft or idea:\n"""\n${userDraft.trim()}\n"""\n\nEnhance and polish it into a full viral LinkedIn post:\n1. One bold punchy hook line\n2. 2-3 sentences personal story/insight\n3. Exactly 3 numbered lessons\n4. Soft CTA (not salesy)\nLength: 180-240 words. Conversational, first person. Blank line between sections.\nReturn ONLY the post text.`, geminiKey),
+        aiText(`Give 5 LinkedIn hashtags for this topic: "${userDraft.trim().slice(0,80)}". Return ONLY hashtags separated by spaces.`, geminiKey),
+      ]);
+      setPost(p); setTags(t.trim());
+      setImgQuery(userDraft.trim().slice(0,40));
+      setStep(3);
+    } catch(e) { sm("post",`❌ ${e.message}`); }
     sb("post",false);
   }
 
   async function genPPT(){
     const Lib=window.PptxGenJS;
-    if(!Lib){sm("ppt","❌ PPT library not loaded. Please refresh the page and try again.");return;}
-    sb("ppt",true);sm("ppt","🤖 Generating slide content with AI...");
+    if(!Lib){sm("ppt","❌ PPT library not loaded. Please refresh the page.");return;}
+    sb("ppt",true);sm("ppt","🤖 AI is crafting your slide content...");
     try{
+      const topicTitle = selected?.title || userDraft.trim().slice(0,60) || "LinkedIn Insights";
       const raw=await aiText(
-        `Create a 6-slide LinkedIn carousel for: "${selected.title}"\nReturn ONLY valid JSON, no markdown:\n{"title":"...","slides":[\n{"heading":"title","body":"subtitle"},\n{"heading":"...","body":"max 45 words","label":"...","stat":"XX%","statLabel":"..."},\n{"heading":"...","body":"max 45 words","label":"...","tip":"max 35 words"},\n{"heading":"...","body":"max 45 words","label":"...","stat":"...","statLabel":"..."},\n{"heading":"...","body":"max 45 words","label":"...","tip":"..."},\n{"heading":"CTA","body":"follow message"}\n]}`,
+        `Create a professional 6-slide LinkedIn carousel about: "${topicTitle}"\n\nIMPORTANT: Return ONLY valid JSON, absolutely no markdown, no explanation:\n{\n"title":"compelling carousel title (max 8 words)",\n"slides":[\n  {"heading":"attention-grabbing title for the carousel","body":"one-line compelling subtitle"},\n  {"heading":"slide 2 heading (max 8 words)","body":"explanation in 40-55 words","label":"Section Name","stat":"a real statistic like 73%","statLabel":"2-3 word description of what this stat means and why it matters","takeaway":"one key insight in 10 words"},\n  {"heading":"slide 3 heading","body":"explanation in 40-55 words","label":"Section Name","tip":"one highly actionable pro tip in 30-40 words","takeaway":"key insight in 10 words"},\n  {"heading":"slide 4 heading","body":"explanation in 40-55 words","label":"Section Name","stat":"another compelling stat","statLabel":"explanation of the stat","takeaway":"key insight in 10 words"},\n  {"heading":"slide 5 heading","body":"explanation in 40-55 words","label":"Section Name","tip":"another actionable pro tip in 30-40 words","takeaway":"key insight in 10 words"},\n  {"heading":"powerful CTA heading (max 10 words)","body":"compelling closing message encouraging them to follow, 20-30 words"}\n]}`,
         geminiKey
       );
       const parsed=parseJSON(raw);
-      if(!parsed?.slides){sm("ppt","⚠️ Could not parse slides. Try again.");sb("ppt",false);return;}
+      if(!parsed?.slides||parsed.slides.length<6){sm("ppt","⚠️ Could not parse slides. Trying again...");sb("ppt",false);return;}
       setPptSlides(parsed.slides);
-      sm("ppt","📊 Rendering your PowerPoint...");
-      const blob=await buildPPTX(parsed.slides,parsed.title||selected.title);
+      sm("ppt","📊 Rendering your advanced PowerPoint...");
+      const blob=await buildPPTX(parsed.slides, parsed.title||topicTitle, topicTitle);
       setPptBlob(blob);
       sm("ppt","✅ Done! Click the green Download button.");
     }catch(e){sm("ppt",`❌ ${e.message}`);}
@@ -325,11 +440,11 @@ function Tool({onHome}) {
     a.click();URL.revokeObjectURL(url);
   }
 
-  async function searchImages(){
+  async function doImageSearch(){
     if(!imgQuery.trim())return;
     sb("img",true);sm("img","");
     try{
-      const results=await searchUnsplash(imgQuery,unsplashKey);
+      const results=await searchImages(imgQuery,pexelsKey);
       if(results.length){setPhotos(results);sm("img","");}
       else sm("img","⚠️ No results. Try different keywords.");
     }catch(e){sm("img",`❌ ${e.message}`);}
@@ -341,22 +456,25 @@ function Tool({onHome}) {
     setCopied(true);setTimeout(()=>setCopied(false),2200);
   }
   function reset(){
-    setStep(1);setDomain("");setCustom("");setTopics([]);setSelected(null);
+    setStep(1);setDomain("");setCustom("");setUserDraft("");setTopics([]);setSelected(null);
     setPost("");setTags("");setPptSlides(null);setPptBlob(null);
-    setPhotos([]);setPickedImg(null);setImgQuery("");setMsgs({});
+    setPhotos([]);setPickedImg(null);setImgQuery("");setMsgs({});setShowChange(false);setChangeReq("");
   }
 
+  // Styles
   const card={background:"#fff",borderRadius:20,padding:"22px 26px",boxShadow:"0 2px 14px rgba(0,0,0,.06)",marginBottom:16,animation:"pfup .3s ease"};
   const bb={border:"none",borderRadius:50,fontWeight:700,cursor:"pointer",transition:"all .18s",fontSize:13,display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px"};
   const bP={...bb,background:"#0A66C2",color:"#fff"};
   const bO={...bb,background:"#fff",color:"#0A66C2",border:"2px solid #0A66C2"};
   const bG={...bb,background:"#16A34A",color:"#fff"};
   const bV={...bb,background:"#7C3AED",color:"#fff"};
+  const bA={...bb,background:"#F59E0B",color:"#fff"};
   const inp={padding:"10px 13px",border:"1.5px solid #E2E8F0",borderRadius:11,fontSize:14,outline:"none",width:"100%",color:"#1E293B",background:"#fff"};
   const ta={...inp,resize:"vertical",lineHeight:1.7};
 
   return (
     <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:"#F1F5F9",minHeight:"100vh",paddingBottom:70}}>
+
       {/* Topbar */}
       <div style={{background:"#0A0F1E",padding:"12px 22px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontWeight:900,fontSize:17,color:"#fff"}}>⚡ PostFlow<span style={{color:"#38BDF8"}}> AI</span></div>
@@ -366,10 +484,10 @@ function Tool({onHome}) {
         </div>
       </div>
 
-      {/* Progress bar */}
+      {/* Progress */}
       <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:"12px 0"}}>
-        <div style={{maxWidth:680,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center"}}>
-          {["Keys","Topic","Post","Assets"].map((s,i)=>{
+        <div style={{maxWidth:700,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center"}}>
+          {["Keys","Idea / Topic","Post","Assets"].map((s,i)=>{
             const n=i+1,done=step>n,active=step===n;
             return (
               <React.Fragment key={s}>
@@ -384,42 +502,41 @@ function Tool({onHome}) {
         </div>
       </div>
 
-      <div style={{maxWidth:680,margin:"20px auto 0",padding:"0 16px"}}>
+      <div style={{maxWidth:700,margin:"20px auto 0",padding:"0 16px"}}>
 
         {/* ── KEYS ── */}
         <div style={card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
             <div>
               <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🔑 API Keys</h2>
-              <p style={{margin:0,color:"#64748B",fontSize:13}}>Keys stay in your browser only — never sent to any server except Google & Unsplash.</p>
+              <p style={{margin:0,color:"#64748B",fontSize:13}}>Keys stay in your browser only — never sent anywhere except Google & Pexels.</p>
             </div>
             {keysSaved&&<span style={{background:"#F0FDF4",color:"#15803D",fontSize:12,fontWeight:700,padding:"4px 12px",borderRadius:20}}>✓ Saved</span>}
           </div>
-
-          <div style={{marginTop:14}}>
-            <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>
-              Gemini Key (required) — <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2",fontWeight:400,textTransform:"none"}}>Get free at aistudio.google.com</a>
-            </label>
-            <div style={{position:"relative"}}>
-              <input type={showKey?"text":"password"} placeholder="AIza..." value={geminiKey} onChange={e=>{setGeminiKey(e.target.value);setKeysSaved(false);sm("keys","");}} style={inp}/>
-              <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14}}>{showKey?"🙈":"👁️"}</button>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:14}}>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>
+                Gemini Key (required) · <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2",textTransform:"none",fontWeight:400}}>aistudio.google.com</a>
+              </label>
+              <div style={{position:"relative"}}>
+                <input type={showKey?"text":"password"} placeholder="AIza..." value={geminiKey} onChange={e=>{setGeminiKey(e.target.value);setKeysSaved(false);sm("keys","");}} style={inp}/>
+                <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14}}>{showKey?"🙈":"👁️"}</button>
+              </div>
+              <div style={{fontSize:11,color:"#94A3B8",marginTop:3}}>Free · Powers all AI features</div>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>
+                Pexels Key (optional) · <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2",textTransform:"none",fontWeight:400}}>pexels.com/api</a>
+              </label>
+              <input type="password" placeholder="Leave blank — photos work without it" value={pexelsKey} onChange={e=>setPexelsKey(e.target.value)} style={inp}/>
+              <div style={{fontSize:11,color:"#94A3B8",marginTop:3}}>Optional · Better photo search</div>
             </div>
           </div>
-
-          <div style={{marginTop:12}}>
-            <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>
-              Unsplash Key (optional) — <a href="https://unsplash.com/developers" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2",fontWeight:400,textTransform:"none"}}>Free at unsplash.com/developers</a>
-              <span style={{color:"#94A3B8",fontWeight:400,marginLeft:6}}>· Leave blank to use auto photos</span>
-            </label>
-            <input type="password" placeholder="Leave blank — photos still work without a key!" value={unsplashKey} onChange={e=>{setUnsplashKey(e.target.value);}} style={inp}/>
-          </div>
-
           <button style={{...bP,marginTop:14}} onClick={saveKeys}>Save & Continue →</button>
           {msgs.keys&&<Notice type={msgs.keys.startsWith("✅")?"success":"warn"}>{msgs.keys}</Notice>}
-
           {!keysSaved&&(
             <div style={{marginTop:14,padding:"12px 14px",background:"#F8FAFC",borderRadius:12,border:"1px solid #E2E8F0",fontSize:13,color:"#475569",lineHeight:1.8}}>
-              <strong style={{color:"#0F172A"}}>How to get your free Gemini key (60 seconds):</strong><br/>
+              <strong style={{color:"#0F172A"}}>Get your free Gemini key (60 sec):</strong><br/>
               1. Open <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2"}}>aistudio.google.com/app/apikey</a><br/>
               2. Sign in with Google → click <strong>"Create API Key"</strong><br/>
               3. Copy and paste it above → click <strong>Save & Continue</strong>
@@ -427,28 +544,55 @@ function Tool({onHome}) {
           )}
         </div>
 
+        {/* ── IDEA / DRAFT INPUT ── */}
+        <div style={card}>
+          <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>💡 Your Idea or Existing Draft</h2>
+          <p style={{margin:"0 0 12px",color:"#64748B",fontSize:13}}>
+            Already have an idea, rough draft, or notes? Paste them here — AI will polish and enhance them.
+            <br/><span style={{color:"#94A3B8"}}>Or leave this blank and let AI suggest topics below.</span>
+          </p>
+          <textarea
+            value={userDraft}
+            onChange={e=>setUserDraft(e.target.value)}
+            placeholder={"Paste your draft, rough notes, or idea here...\n\nExamples:\n• 'I want to write about how I grew my LinkedIn to 5k followers in 6 months'\n• A rough draft you already wrote\n• Key points you want to cover\n• A story you want to tell"}
+            style={{...ta,minHeight:120,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}
+          />
+          {userDraft.trim()&&(
+            <div style={{marginTop:10,display:"flex",gap:9,flexWrap:"wrap"}}>
+              <button style={bA} onClick={draftFromOwnIdea} disabled={busy.post||!geminiKey}>
+                {busy.post?<><Spin/>Enhancing your draft...</>:"✨ Polish & Enhance My Draft"}
+              </button>
+              <span style={{fontSize:12,color:"#64748B",alignSelf:"center"}}>— or scroll down to pick a niche for topic ideas</span>
+            </div>
+          )}
+          {msgs.draft&&<Notice type="warn">{msgs.draft}</Notice>}
+        </div>
+
         {/* ── DOMAIN + TOPIC ── */}
         <div style={card}>
           <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🎯 Domain & Topic</h2>
-          <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Pick a niche for AI ideas — or type your own topic and skip straight to drafting</p>
+          <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>
+            Pick a niche for AI topic suggestions — or type a specific topic and draft directly
+            {userDraft.trim()&&<span style={{color:"#0A66C2"}}> · Your draft above will be used as extra context</span>}
+          </p>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
             <div>
               <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Select Domain</label>
               <select value={domain} onChange={e=>{setDomain(e.target.value);setTopics([]);setSelected(null);}} style={{...inp,cursor:"pointer"}}>
-                <option value="">— Choose niche —</option>
+                <option value="">— Choose your niche —</option>
                 {DOMAINS.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
             </div>
             <div>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Or Type Your Topic</label>
-              <input type="text" placeholder="e.g. How I got 10k followers..." value={custom} onChange={e=>setCustom(e.target.value)} onKeyDown={e=>e.key==="Enter"&&useDirect()} style={inp}/>
+              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Or Type a Specific Topic</label>
+              <input type="text" placeholder="e.g. How I grew to 10k followers..." value={custom} onChange={e=>setCustom(e.target.value)} onKeyDown={e=>e.key==="Enter"&&useDirect()} style={inp}/>
             </div>
           </div>
           <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
             <button style={{...bP,opacity:(!domain&&!custom.trim())||busy.topics?0.6:1}} onClick={getTopics} disabled={busy.topics||(!domain&&!custom.trim())}>
               {busy.topics?<><Spin/>Finding topics...</>:"🔥 Get AI Topic Ideas"}
             </button>
-            {custom.trim()&&<button style={bO} onClick={useDirect}>✍️ Use My Topic Directly</button>}
+            {custom.trim()&&<button style={bO} onClick={useDirect}>✍️ Use This Topic Directly</button>}
           </div>
           {msgs.topics&&<Notice type="error">{msgs.topics}</Notice>}
         </div>
@@ -457,7 +601,7 @@ function Tool({onHome}) {
         {step>=2&&topics.length>0&&(
           <div style={card}>
             <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🔥 AI Topic Suggestions</h2>
-            <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Click one to select it</p>
+            <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Click one to select it · AI used your context to make these relevant</p>
             {topics.map((t,i)=>(
               <div key={i} onClick={()=>pick(t)} style={{border:`2px solid ${selected===t?"#0A66C2":"#E2E8F0"}`,borderRadius:13,padding:"13px 15px",cursor:"pointer",background:selected===t?"#EFF6FF":"#FAFCFF",marginBottom:9,transition:"all .2s"}}>
                 <div style={{display:"flex",justifyContent:"space-between"}}>
@@ -471,32 +615,32 @@ function Tool({onHome}) {
                 </div>
               </div>
             ))}
-            {selected&&<button style={{...bP,marginTop:8}} onClick={draftPost} disabled={busy.post}>{busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}</button>}
+            {selected&&<button style={{...bP,marginTop:8}} onClick={()=>draftPost(false)} disabled={busy.post}>{busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}</button>}
             {msgs.post&&<Notice type="error">{msgs.post}</Notice>}
           </div>
         )}
 
         {/* custom topic row */}
-        {step>=2&&selected&&topics.length===0&&(
+        {step>=2&&selected&&topics.length===0&&selected.angle!=="own-draft"&&(
           <div style={card}>
             <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:15,color:"#0F172A"}}>{selected.emoji} {selected.title}</div>
                 <div style={{fontSize:13,color:"#64748B",marginTop:3}}>Your custom topic</div>
               </div>
-              <button style={bP} onClick={draftPost} disabled={busy.post}>{busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}</button>
+              <button style={bP} onClick={()=>draftPost(false)} disabled={busy.post}>{busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}</button>
             </div>
             {msgs.post&&<Notice type="error">{msgs.post}</Notice>}
           </div>
         )}
 
-        {/* ── POST ── */}
+        {/* ── POST EDITOR ── */}
         {step>=3&&post&&(
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
               <div>
                 <h2 style={{margin:0,fontSize:18,color:"#0F172A"}}>✍️ Your LinkedIn Post</h2>
-                <p style={{margin:"3px 0 0",fontSize:13,color:"#64748B"}}>Edit freely below</p>
+                <p style={{margin:"3px 0 0",fontSize:13,color:"#64748B"}}>Edit freely · Use AI to make changes below</p>
               </div>
               <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
                 <button style={bO} onClick={copyAll}>{copied?"✅ Copied!":"📋 Copy + Hashtags"}</button>
@@ -506,6 +650,39 @@ function Tool({onHome}) {
             <textarea value={post} onChange={e=>setPost(e.target.value)} style={{...ta,minHeight:220}}/>
             {tags&&<div style={{marginTop:10,padding:"10px 14px",background:"#EFF6FF",borderRadius:10,fontSize:13,color:"#1D4ED8"}}>{tags}</div>}
             <div style={{marginTop:7,fontSize:12,color:"#94A3B8"}}>{post.split(/\s+/).filter(Boolean).length} words</div>
+
+            {/* ── AI CHANGES BOX ── */}
+            <div style={{marginTop:18,borderTop:"1px solid #E2E8F0",paddingTop:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:14,color:"#0F172A"}}>🤖 Ask AI to Make Changes</div>
+                  <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Tell AI what to change — it will rewrite the post keeping the format</div>
+                </div>
+                <button onClick={()=>setShowChange(p=>!p)} style={{...bO,padding:"6px 14px",fontSize:12}}>
+                  {showChange?"▲ Hide":"✏️ Request Changes"}
+                </button>
+              </div>
+              {showChange&&(
+                <div style={{animation:"pfup .2s ease"}}>
+                  <textarea
+                    value={changeReq}
+                    onChange={e=>setChangeReq(e.target.value)}
+                    placeholder={"Tell AI what to change, for example:\n• Make the hook more punchy\n• Make it shorter — under 150 words\n• Add more humor / make it lighter in tone\n• Focus more on personal story, less on advice\n• Change the CTA to ask people to comment\n• Make it sound less salesy"}
+                    style={{...ta,minHeight:90,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}
+                  />
+                  <div style={{display:"flex",gap:9,marginTop:10,flexWrap:"wrap"}}>
+                    <button
+                      style={{...bA,opacity:(!changeReq.trim()||busy.post)?0.6:1}}
+                      onClick={()=>draftPost(true)}
+                      disabled={!changeReq.trim()||busy.post}
+                    >
+                      {busy.post?<><Spin/>Rewriting...</>:"✨ Apply Changes with AI"}
+                    </button>
+                    <button style={{...bO,padding:"10px 16px"}} onClick={()=>{setShowChange(false);setChangeReq("");}}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -514,57 +691,66 @@ function Tool({onHome}) {
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:12}}>
               <div>
-                <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>📊 Carousel PPT</h2>
-                <p style={{margin:0,fontSize:13,color:"#64748B"}}>Branded 6-slide .pptx — download & post on LinkedIn</p>
+                <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>📊 Advanced Carousel PPT</h2>
+                <p style={{margin:0,fontSize:13,color:"#64748B"}}>Pro-grade 6-slide .pptx with stats, tips, gradients · Upload directly to LinkedIn</p>
               </div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                 {!pptBlob
-                  ?<button style={{...bO,opacity:busy.ppt?0.6:1}} onClick={genPPT} disabled={busy.ppt}>{busy.ppt?<><Spin color="#0A66C2"/>Building...</>:"⚡ Generate PPT"}</button>
-                  :<><button style={{...bO,opacity:busy.ppt?0.6:1}} onClick={genPPT} disabled={busy.ppt}>↺ Redo</button><button style={bG} onClick={dlPPT}>⬇ Download .pptx</button></>
+                  ?<button style={{...bO,opacity:busy.ppt?0.6:1}} onClick={genPPT} disabled={busy.ppt}>{busy.ppt?<><Spin color="#0A66C2"/>Building...</>:"⚡ Generate Advanced PPT"}</button>
+                  :<><button style={{...bO,opacity:busy.ppt?0.6:1}} onClick={genPPT} disabled={busy.ppt}>↺ Regenerate</button><button style={bG} onClick={dlPPT}>⬇ Download .pptx</button></>
                 }
               </div>
             </div>
             {msgs.ppt&&<Notice type={msgs.ppt.startsWith("✅")?"success":msgs.ppt.startsWith("❌")?"error":"warn"}>{msgs.ppt}</Notice>}
             {pptSlides&&(
-              <div style={{marginTop:14,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(145px,1fr))",gap:9}}>
-                {pptSlides.map((s,i)=>(
-                  <div key={i} style={{border:"1px solid #E2E8F0",borderRadius:10,overflow:"hidden",background:i===0||i===pptSlides.length-1?"#0F172A":"#fff"}}>
-                    <div style={{background:"#0A66C2",height:3}}/>
-                    <div style={{padding:"9px 11px"}}>
-                      <div style={{fontSize:9,color:i===0||i===pptSlides.length-1?"#38BDF8":"#0A66C2",fontWeight:800,marginBottom:3,textTransform:"uppercase"}}>{i===0?"Title":i===pptSlides.length-1?"CTA":`Slide ${i+1}`}</div>
-                      <div style={{fontWeight:700,fontSize:11,color:i===0||i===pptSlides.length-1?"#F0F4FF":"#0F172A",lineHeight:1.3,marginBottom:3}}>{s.heading}</div>
-                      <div style={{fontSize:10,color:"#94A3B8",lineHeight:1.35}}>{(s.body||"").slice(0,55)}{(s.body||"").length>55?"…":""}</div>
-                    </div>
-                  </div>
-                ))}
+              <div style={{marginTop:14}}>
+                <div style={{fontSize:12,color:"#64748B",marginBottom:9}}>Preview of your {pptSlides.length} slides:</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:9}}>
+                  {pptSlides.map((s,i)=>{
+                    const isT=i===0,isL=i===pptSlides.length-1;
+                    return (
+                      <div key={i} style={{border:"1px solid #E2E8F0",borderRadius:10,overflow:"hidden",background:isT||isL?"#0A1628":"#fff"}}>
+                        <div style={{background:isT||isL?"#0A66C2":"linear-gradient(90deg,#0A66C2,#38BDF8)",height:4}}/>
+                        <div style={{padding:"9px 11px"}}>
+                          <div style={{fontSize:9,color:isT||isL?"#38BDF8":"#0A66C2",fontWeight:800,marginBottom:3,textTransform:"uppercase",letterSpacing:.4}}>{isT?"📌 Cover":isL?"🎯 CTA":`💡 Slide ${i}`}</div>
+                          <div style={{fontWeight:700,fontSize:11,color:isT||isL?"#F0F4FF":"#0F172A",lineHeight:1.3,marginBottom:3}}>{s.heading}</div>
+                          <div style={{fontSize:10,color:"#94A3B8",lineHeight:1.35}}>{(s.body||"").slice(0,55)}{(s.body||"").length>55?"…":""}</div>
+                          {s.stat&&<div style={{marginTop:5,fontSize:14,fontWeight:900,color:"#0A66C2"}}>{s.stat}</div>}
+                          {s.tip&&<div style={{marginTop:4,fontSize:9,color:"#7C3AED"}}>💡 Has Pro Tip</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ── IMAGES (Unsplash) ── */}
+        {/* ── IMAGES ── */}
         {step>=3&&(
           <div style={card}>
-            <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🖼️ Stock Photos — Unsplash</h2>
-            <p style={{margin:"0 0 12px",fontSize:13,color:"#64748B"}}>Search millions of free professional photos — no API key required to search</p>
+            <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🖼️ Cover Photos</h2>
+            <p style={{margin:"0 0 12px",fontSize:13,color:"#64748B"}}>
+              {pexelsKey?"Powered by Pexels · Real photo search · Free":"Powered by Picsum Photos · Beautiful random professional photos · No API key needed · Add a free Pexels key above for real topic search"}
+            </p>
             <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
-              <input type="text" value={imgQuery} onChange={e=>setImgQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&searchImages()} placeholder="e.g. leadership, technology, startup..." style={{...inp,flex:1,minWidth:180}}/>
-              <button style={{...bV,opacity:busy.img||!imgQuery.trim()?0.6:1}} onClick={searchImages} disabled={busy.img||!imgQuery.trim()}>
-                {busy.img?<><Spin/>Searching...</>:"🔍 Search Photos"}
+              <input type="text" value={imgQuery} onChange={e=>setImgQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doImageSearch()} placeholder="Search e.g. leadership, technology, teamwork..." style={{...inp,flex:1,minWidth:180}}/>
+              <button style={{...bV,opacity:busy.img||!imgQuery.trim()?0.6:1}} onClick={doImageSearch} disabled={busy.img||!imgQuery.trim()}>
+                {busy.img?<><Spin/>Searching...</>:"🔍 Find Photos"}
               </button>
             </div>
             {msgs.img&&<Notice type="error">{msgs.img}</Notice>}
             {photos.length>0&&(
               <div style={{marginTop:14}}>
-                <div style={{fontSize:12,color:"#64748B",marginBottom:9}}>Click photo to select · Blue button to download</div>
+                <div style={{fontSize:12,color:"#64748B",marginBottom:9}}>Click to select · ↓ button to download full resolution</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:9}}>
                   {photos.map((ph,i)=>(
                     <div key={i} onClick={()=>setPickedImg(ph)} style={{borderRadius:10,overflow:"hidden",cursor:"pointer",border:`3px solid ${pickedImg===ph?"#0A66C2":"transparent"}`,transition:"border .15s"}}>
-                      <img src={ph.thumb} alt="stock" style={{width:"100%",height:110,objectFit:"cover",display:"block"}}
-                        onError={e=>{e.target.src=`https://source.unsplash.com/400x250/?${imgQuery}&sig=${i}${Date.now()}`;}}/>
+                      <img src={ph.thumb} alt="stock" style={{width:"100%",height:110,objectFit:"cover",display:"block"}} onError={e=>{e.target.style.background="#E2E8F0";e.target.src="";}}/>
                       <div style={{padding:"6px 8px",background:"#F8FAFC",borderTop:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <span style={{fontSize:10,color:"#64748B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:120}}>📷 {ph.photographer}</span>
-                        <a href={ph.download} download="photo.jpg" target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"#0A66C2",color:"#fff",border:"none",borderRadius:6,padding:"3px 8px",fontSize:10,cursor:"pointer",fontWeight:700,textDecoration:"none"}}>↓</a>
+                        <span style={{fontSize:10,color:"#64748B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:130}}>📷 {ph.credit}</span>
+                        <a href={ph.download} download="photo.jpg" target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"#0A66C2",color:"#fff",border:"none",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700,textDecoration:"none",flexShrink:0}}>↓</a>
                       </div>
                     </div>
                   ))}
@@ -572,26 +758,21 @@ function Tool({onHome}) {
                 {pickedImg&&(
                   <div style={{marginTop:12,padding:"10px 14px",background:"#EFF6FF",borderRadius:10,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                     <img src={pickedImg.thumb} style={{width:60,height:40,objectFit:"cover",borderRadius:6}} alt="selected"/>
-                    <div style={{flex:1,fontSize:13,color:"#1D4ED8"}}>✓ Selected · Photo by <strong>{pickedImg.photographer}</strong> on Unsplash</div>
-                    <a href={pickedImg.download} download="linkedin-cover.jpg" target="_blank" rel="noopener noreferrer" style={{...bG,textDecoration:"none"}}>⬇ Download</a>
+                    <div style={{flex:1,fontSize:13,color:"#1D4ED8"}}>✓ Selected · Photo by <strong>{pickedImg.credit}</strong> via {pickedImg.source}</div>
+                    <a href={pickedImg.download} download="linkedin-cover.jpg" target="_blank" rel="noopener noreferrer" style={{...bG,textDecoration:"none"}}>⬇ Download Full Res</a>
                   </div>
                 )}
-                <div style={{marginTop:8,fontSize:11,color:"#94A3B8"}}>Photos by <a href="https://unsplash.com" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2"}}>Unsplash</a></div>
               </div>
             )}
           </div>
         )}
 
         {step>=3&&<div style={{textAlign:"center",marginTop:4,marginBottom:20}}><button style={bO} onClick={reset}>🔄 Start a New Post</button></div>}
-
       </div>
     </div>
   );
 }
 
-/* ══════════════════════════════════════
-   ROOT
-══════════════════════════════════════ */
 function App() {
   const [view, setView] = useState("landing");
   return view==="landing" ? <Landing onLaunch={()=>setView("tool")}/> : <Tool onHome={()=>setView("landing")}/>;
