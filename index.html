@@ -41,7 +41,7 @@
     async function aiText(prompt, geminiKey) {
       if (!geminiKey) throw new Error("Please save your Gemini API key first.");
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
         { method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({ contents:[{ parts:[{ text: prompt }] }] }) }
       );
@@ -54,14 +54,20 @@
     async function aiImage(prompt, geminiKey) {
       if (!geminiKey) throw new Error("Gemini key required.");
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${geminiKey}`,
         { method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ instances:[{ prompt }], parameters:{ sampleCount:1, aspectRatio:"16:9" } }) }
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseModalities: ["IMAGE", "TEXT"] }
+          })
+        }
       );
       const d = await res.json();
       if (d.error) throw new Error(d.error.message);
-      const b64 = d.predictions?.[0]?.bytesBase64Encoded;
-      return b64 ? `data:image/png;base64,${b64}` : null;
+      const parts = d.candidates?.[0]?.content?.parts || [];
+      const imgPart = parts.find(p => p.inlineData?.mimeType?.startsWith("image/"));
+      if (imgPart) return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+      return null;
     }
 
     function parseJSON(raw) {
