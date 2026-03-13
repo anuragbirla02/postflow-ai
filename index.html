@@ -4,38 +4,28 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>PostFlow AI — LinkedIn Post Automator</title>
-
   <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.0/dist/pptxgen.bundle.js"></script>
-
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Segoe UI',system-ui,sans-serif;background:#F1F5F9}
     @keyframes pfdot{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
-    @keyframes pfup{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-    @keyframes pfglow{0%,100%{box-shadow:0 0 0 0 rgba(10,102,194,.5)}50%{box-shadow:0 0 28px 8px rgba(10,102,194,.18)}}
-    @keyframes pffl{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
-    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pfup{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes pfglow{0%,100%{box-shadow:0 0 0 0 rgba(10,102,194,.4)}50%{box-shadow:0 0 30px 8px rgba(10,102,194,.18)}}
     textarea,input,select{font-family:inherit}
   </style>
 </head>
 <body>
-<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#64748B;font-size:15px">Loading PostFlow AI...</div></div>
-
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#64748B;font-size:15px">⚡ Loading PostFlow AI...</div></div>
 <script type="text/babel">
 const { useState } = React;
 
-const DOMAINS = [
-  "Tech & AI","Data Science","Web Development","Product Management",
-  "Business Strategy","Marketing & Growth","Finance & Investing",
-  "Leadership","Startups","Career Growth","Cybersecurity",
-  "UX & Design","DevOps & Cloud","Blockchain","Healthcare & MedTech",
-];
+const DOMAINS = ["Tech & AI","Data Science","Web Development","Product Management","Business Strategy","Marketing & Growth","Finance & Investing","Leadership","Startups","Career Growth","Cybersecurity","UX & Design","DevOps & Cloud","Blockchain","Healthcare & MedTech"];
 
-/* ══ GEMINI TEXT ══ */
+/* ─── Gemini Text ─── */
 async function aiText(prompt, key) {
   if (!key) throw new Error("Please save your Gemini API key first.");
   const res = await fetch(
@@ -48,9 +38,31 @@ async function aiText(prompt, key) {
   return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
-/* Images now handled by Puter.js AI generation */
+/* ─── Gemini Image (Option B) ─── */
+async function geminiImage(prompt, key) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${key}`,
+    { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        contents:[{ parts:[{ text: prompt }] }],
+        generationConfig:{ responseModalities:["TEXT","IMAGE"] }
+      })
+    }
+  );
+  const d = await res.json();
+  if (d.error) throw new Error(d.error.message);
+  const parts = d.candidates?.[0]?.content?.parts || [];
+  const img = parts.find(p => p.inlineData?.mimeType?.startsWith("image/"));
+  if (!img) throw new Error("No image returned from Gemini");
+  return "data:" + img.inlineData.mimeType + ";base64," + img.inlineData.data;
+}
 
-/* ══ JSON PARSER ══ */
+/* ─── Pollinations Image (Option C — no key, no login) ─── */
+function pollinationsUrl(prompt) {
+  return "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=1200&height=675&model=flux&nologo=true&seed=" + Date.now();
+}
+
+/* ─── JSON Parser ─── */
 function parseJSON(raw) {
   try { return JSON.parse(raw.replace(/```json|```/g,"").trim()); }
   catch {
@@ -60,153 +72,104 @@ function parseJSON(raw) {
   }
 }
 
-/* ══ ADVANCED PPTX BUILDER ══ */
-async function buildPPTX(slides, title, topic) {
+/* ─── Advanced PPTX Builder ─── */
+async function buildPPTX(slides, title) {
   const Lib = window.PptxGenJS;
-  if (!Lib) throw new Error("PPT library not available. Please refresh and try again.");
+  if (!Lib) throw new Error("PPT library not loaded. Please refresh and try again.");
   const pres = new Lib();
   pres.layout = "LAYOUT_16x9";
   pres.title = title;
-
-  // Color system
-  const C = {
-    navy:   "0A1628", darkBlue: "0F172A", brand:  "0A66C2",
-    bright: "2563EB", accent:  "38BDF8",  teal:   "0EA5E9",
-    white:  "FFFFFF", light:   "EFF6FF",  silver: "F1F5F9",
-    muted:  "94A3B8", slate:   "334155",  text:   "1E293B",
-    gold:   "F59E0B", green:   "10B981",  purple: "7C3AED",
-  };
+  const C = { navy:"0A1628", dark:"0F172A", brand:"0A66C2", accent:"38BDF8", teal:"0EA5E9", white:"FFFFFF", light:"EFF6FF", silver:"F1F5F9", muted:"94A3B8", slate:"334155" };
 
   slides.forEach((s, i) => {
     const sl = pres.addSlide();
     const isTitle = i === 0;
     const isLast  = i === slides.length - 1;
 
-    // ── TITLE SLIDE (Slide 0) ──
     if (isTitle) {
-      // Full dark gradient background
       sl.background = { color: C.navy };
-      // Large decorative circles
       sl.addShape(pres.ShapeType.ellipse, { x:-1.2, y:-1.2, w:5, h:5, fill:{color:C.brand,transparency:82}, line:{color:C.brand,width:0} });
-      sl.addShape(pres.ShapeType.ellipse, { x:7.5,  y:3.5,  w:4, h:4, fill:{color:C.accent,transparency:85}, line:{color:C.accent,width:0} });
-      sl.addShape(pres.ShapeType.ellipse, { x:5.5,  y:-0.8, w:2.5, h:2.5, fill:{color:C.teal,transparency:88}, line:{color:C.teal,width:0} });
-      // Top badge
+      sl.addShape(pres.ShapeType.ellipse, { x:7.5, y:3.5, w:4, h:4, fill:{color:C.accent,transparency:85}, line:{color:C.accent,width:0} });
+      sl.addShape(pres.ShapeType.ellipse, { x:5.5, y:-0.8, w:2.5, h:2.5, fill:{color:C.teal,transparency:88}, line:{color:C.teal,width:0} });
       sl.addShape(pres.ShapeType.roundRect, { x:0.55, y:0.35, w:2.6, h:0.45, fill:{color:C.brand}, rectRadius:0.12, line:{color:C.brand,width:0} });
       sl.addText("⚡ PostFlow AI", { x:0.55, y:0.35, w:2.6, h:0.45, fontSize:11, color:C.white, bold:true, align:"center", valign:"middle" });
-      // Main title
-      sl.addText(title, { x:0.55, y:1.05, w:7.8, h:2.5, fontSize:34, color:C.white, bold:true, align:"left", valign:"middle",
-        shadow:{ type:"outer", color:"000000", blur:6, offset:2, angle:45, opacity:0.4 } });
-      // Subtitle line
+      sl.addText(title, { x:0.55, y:1.05, w:7.8, h:2.5, fontSize:34, color:C.white, bold:true, align:"left", valign:"middle" });
       sl.addShape(pres.ShapeType.rect, { x:0.55, y:3.7, w:1.6, h:0.055, fill:{color:C.accent}, line:{color:C.accent,width:0} });
       sl.addText(s.body || "A LinkedIn Carousel", { x:0.55, y:3.85, w:7, h:0.55, fontSize:15, color:C.muted, align:"left" });
-      // Bottom bar
       sl.addShape(pres.ShapeType.rect, { x:0, y:5.25, w:10, h:0.375, fill:{color:C.brand,transparency:70}, line:{color:C.brand,width:0} });
-      sl.addText("Made with PostFlow AI  |  postflow.ai", { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"left", valign:"middle" });
-      sl.addText(`${slides.length - 2} Key Insights`, { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"right", valign:"middle" });
-    }
-
-    // ── CONTENT SLIDES (Slides 1 to n-2) ──
-    else if (!isLast) {
-      const isEven = i % 2 === 0;
-
-      sl.background = { color: isEven ? C.silver : C.white };
-
-      // Top accent bar (full width, thin)
+      sl.addText("Made with PostFlow AI", { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"left", valign:"middle" });
+      sl.addText(slides.length - 2 + " Key Insights", { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"right", valign:"middle" });
+    } else if (!isLast) {
+      sl.background = { color: i % 2 === 0 ? C.silver : C.white };
       sl.addShape(pres.ShapeType.rect, { x:0, y:0, w:10, h:0.08, fill:{color:C.brand}, line:{color:C.brand,width:0} });
-
-      // Slide number pill (top right)
       sl.addShape(pres.ShapeType.roundRect, { x:8.85, y:0.18, w:0.8, h:0.36, fill:{color:C.brand}, rectRadius:0.1, line:{color:C.brand,width:0} });
-      sl.addText(`${i} / ${slides.length - 2}`, { x:8.85, y:0.18, w:0.8, h:0.36, fontSize:9, color:C.white, bold:true, align:"center", valign:"middle" });
-
-      // Section label
-      sl.addText((s.label || `Insight ${i}`).toUpperCase(), { x:0.45, y:0.22, w:6, h:0.35, fontSize:10, color:C.brand, bold:true, align:"left", charSpacing:1.2 });
-
-      // Main heading
-      sl.addText(s.heading || "", { x:0.45, y:0.62, w:9.1, h:1.0, fontSize:24, color:C.darkBlue, bold:true, align:"left",
-        shadow:{ type:"outer", color:"000000", blur:3, offset:1, angle:45, opacity:0.15 } });
-
-      // Divider line
+      sl.addText(i + " / " + (slides.length - 2), { x:8.85, y:0.18, w:0.8, h:0.36, fontSize:9, color:C.white, bold:true, align:"center", valign:"middle" });
+      sl.addText((s.label || "Insight " + i).toUpperCase(), { x:0.45, y:0.22, w:6, h:0.35, fontSize:10, color:C.brand, bold:true, align:"left", charSpacing:1.2 });
+      sl.addText(s.heading || "", { x:0.45, y:0.62, w:9.1, h:1.0, fontSize:24, color:C.dark, bold:true, align:"left" });
       sl.addShape(pres.ShapeType.rect, { x:0.45, y:1.68, w:1.8, h:0.07, fill:{color:C.accent}, line:{color:C.accent,width:0} });
-
-      // Body text (left side)
       sl.addText(s.body || "", { x:0.45, y:1.88, w:5.7, h:2.6, fontSize:13, color:C.slate, align:"left", valign:"top", lineSpacingMultiple:1.4 });
-
-      // Right panel (stat box or tip box)
       if (s.stat) {
-        // Stat panel with gradient-like layering
         sl.addShape(pres.ShapeType.roundRect, { x:6.45, y:1.1, w:3.15, h:3.8, fill:{color:C.brand}, rectRadius:0.18, line:{color:C.brand,width:0} });
-        sl.addShape(pres.ShapeType.roundRect, { x:6.55, y:1.2,  w:3.05, h:3.6, fill:{color:"0D3B6E",transparency:60}, rectRadius:0.15, line:{color:"0D3B6E",width:0} });
         sl.addShape(pres.ShapeType.ellipse, { x:7.1, y:1.3, w:2, h:2, fill:{color:C.accent,transparency:88}, line:{color:C.accent,width:0} });
         sl.addText("📊", { x:6.55, y:1.35, w:3, h:0.55, fontSize:22, align:"center", valign:"middle" });
         sl.addText(s.stat, { x:6.55, y:1.95, w:3, h:1.1, fontSize:36, color:C.white, bold:true, align:"center" });
         sl.addShape(pres.ShapeType.rect, { x:7.2, y:3.1, w:1.6, h:0.055, fill:{color:C.accent,transparency:40}, line:{color:C.accent,width:0} });
         sl.addText(s.statLabel || "", { x:6.55, y:3.25, w:3, h:0.9, fontSize:11, color:"BBD4F0", align:"center", lineSpacingMultiple:1.35 });
       } else {
-        // Tip panel
         sl.addShape(pres.ShapeType.roundRect, { x:6.45, y:1.1, w:3.15, h:3.8, fill:{color:C.light}, rectRadius:0.18, line:{color:"BFDBFE",width:1} });
         sl.addShape(pres.ShapeType.roundRect, { x:6.45, y:1.1, w:3.15, h:0.7, fill:{color:C.brand}, rectRadius:0.18, line:{color:C.brand,width:0} });
         sl.addShape(pres.ShapeType.rect, { x:6.45, y:1.6, w:3.15, h:0.2, fill:{color:C.brand}, line:{color:C.brand,width:0} });
-        sl.addText("💡  Pro Tip", { x:6.55, y:1.1, w:3, h:0.7, fontSize:12, color:C.white, bold:true, align:"center", valign:"middle" });
-        sl.addText(s.tip || (s.body||"").slice(0,130), { x:6.6, y:1.95, w:2.9, h:2.8, fontSize:12, color:C.slate, align:"left", valign:"top", lineSpacingMultiple:1.45 });
+        sl.addText("💡 Pro Tip", { x:6.55, y:1.1, w:3, h:0.7, fontSize:12, color:C.white, bold:true, align:"center", valign:"middle" });
+        sl.addText(s.tip || (s.body || "").slice(0,130), { x:6.6, y:1.95, w:2.9, h:2.8, fontSize:12, color:C.slate, align:"left", valign:"top", lineSpacingMultiple:1.45 });
       }
-
-      // Bottom watermark
-      sl.addText("PostFlow AI", { x:0.45, y:5.32, w:3, h:0.2, fontSize:8, color:C.muted, align:"left" });
-
-      // Key takeaway box at bottom
       if (s.takeaway) {
         sl.addShape(pres.ShapeType.roundRect, { x:0.45, y:4.7, w:5.7, h:0.55, fill:{color:C.light}, rectRadius:0.1, line:{color:"BFDBFE",width:1} });
-        sl.addText(`⭐ ${s.takeaway}`, { x:0.55, y:4.7, w:5.5, h:0.55, fontSize:11, color:C.brand, bold:true, align:"left", valign:"middle" });
+        sl.addText("⭐ " + s.takeaway, { x:0.55, y:4.7, w:5.5, h:0.55, fontSize:11, color:C.brand, bold:true, align:"left", valign:"middle" });
       }
-    }
-
-    // ── CTA / FINAL SLIDE ──
-    else {
+      sl.addText("PostFlow AI", { x:0.45, y:5.32, w:3, h:0.2, fontSize:8, color:C.muted, align:"left" });
+    } else {
       sl.background = { color: C.navy };
-      // Decorative shapes
-      sl.addShape(pres.ShapeType.ellipse, { x:6.5,  y:-0.5, w:5,   h:5,   fill:{color:C.brand,transparency:85}, line:{color:C.brand,width:0} });
-      sl.addShape(pres.ShapeType.ellipse, { x:-0.5, y:3.5,  w:3.5, h:3.5, fill:{color:C.accent,transparency:88}, line:{color:C.accent,width:0} });
-      sl.addShape(pres.ShapeType.ellipse, { x:8.5,  y:3.8,  w:2,   h:2,   fill:{color:C.teal,transparency:88}, line:{color:C.teal,width:0} });
-      // Top label
+      sl.addShape(pres.ShapeType.ellipse, { x:6.5, y:-0.5, w:5, h:5, fill:{color:C.brand,transparency:85}, line:{color:C.brand,width:0} });
+      sl.addShape(pres.ShapeType.ellipse, { x:-0.5, y:3.5, w:3.5, h:3.5, fill:{color:C.accent,transparency:88}, line:{color:C.accent,width:0} });
       sl.addText("KEY TAKEAWAY", { x:0.55, y:0.45, w:9, h:0.38, fontSize:11, color:C.accent, bold:true, align:"left", charSpacing:2 });
-      // Main heading
-      sl.addText(s.heading || "", { x:0.55, y:0.95, w:8.5, h:2.0, fontSize:28, color:C.white, bold:true, align:"left",
-        shadow:{ type:"outer", color:"000000", blur:6, offset:2, angle:45, opacity:0.4 } });
-      // Divider
+      sl.addText(s.heading || "", { x:0.55, y:0.95, w:8.5, h:2.0, fontSize:28, color:C.white, bold:true, align:"left" });
       sl.addShape(pres.ShapeType.rect, { x:0.55, y:3.05, w:2.2, h:0.07, fill:{color:C.accent}, line:{color:C.accent,width:0} });
-      // Body
       sl.addText(s.body || "", { x:0.55, y:3.25, w:7, h:1.2, fontSize:13, color:C.muted, align:"left", lineSpacingMultiple:1.4 });
-      // CTA Button
       sl.addShape(pres.ShapeType.roundRect, { x:0.55, y:4.65, w:3.2, h:0.65, fill:{color:C.accent}, rectRadius:0.14, line:{color:C.accent,width:0} });
       sl.addText("Follow for more insights →", { x:0.55, y:4.65, w:3.2, h:0.65, fontSize:13, color:C.navy, bold:true, align:"center", valign:"middle" });
-      // Bottom
       sl.addShape(pres.ShapeType.rect, { x:0, y:5.25, w:10, h:0.375, fill:{color:C.brand,transparency:70}, line:{color:C.brand,width:0} });
       sl.addText("PostFlow AI  |  Made for LinkedIn Creators", { x:0.55, y:5.25, w:9, h:0.375, fontSize:9, color:C.muted, align:"left", valign:"middle" });
     }
   });
-
   return await pres.write({ outputType:"blob" });
 }
 
-/* ══ UI HELPERS ══ */
-function Spin({color="#fff"}) {
-  return <span style={{display:"inline-flex",gap:3,alignItems:"center"}}>
-    {[0,.15,.3].map((d,i)=><span key={i} style={{width:5,height:5,borderRadius:"50%",background:color,display:"inline-block",animation:`pfdot 1.2s ${d}s infinite ease-in-out`}}/>)}
-  </span>;
+/* ─── UI Helpers ─── */
+function Spin({ color="#fff" }) {
+  return (
+    <span style={{display:"inline-flex",gap:3,alignItems:"center"}}>
+      {[0,.15,.3].map((d,i) => (
+        <span key={i} style={{width:5,height:5,borderRadius:"50%",background:color,display:"inline-block",animation:"pfdot 1.2s " + d + "s infinite ease-in-out"}}/>
+      ))}
+    </span>
+  );
 }
-function Notice({type="info",children}) {
-  const s={info:{bg:"#EFF6FF",b:"#BFDBFE",c:"#1D4ED8"},success:{bg:"#F0FDF4",b:"#BBF7D0",c:"#15803D"},warn:{bg:"#FFFBEB",b:"#FDE68A",c:"#92400E"},error:{bg:"#FEF2F2",b:"#FECACA",c:"#991B1B"}}[type]||{bg:"#EFF6FF",b:"#BFDBFE",c:"#1D4ED8"};
-  return <div style={{background:s.bg,border:`1px solid ${s.b}`,color:s.c,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:500,marginTop:10,lineHeight:1.55}}>{children}</div>;
+function Notice({ type, children }) {
+  const s = { info:{bg:"#EFF6FF",b:"#BFDBFE",c:"#1D4ED8"}, success:{bg:"#F0FDF4",b:"#BBF7D0",c:"#15803D"}, warn:{bg:"#FFFBEB",b:"#FDE68A",c:"#92400E"}, error:{bg:"#FEF2F2",b:"#FECACA",c:"#991B1B"} }[type] || {bg:"#EFF6FF",b:"#BFDBFE",c:"#1D4ED8"};
+  return <div style={{background:s.bg,border:"1px solid "+s.b,color:s.c,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:500,marginTop:10,lineHeight:1.55}}>{children}</div>;
 }
 
-/* ══ LANDING ══ */
-function Landing({onLaunch}) {
+/* ─── Landing ─── */
+function Landing({ onLaunch }) {
   return (
     <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:"#0A0F1E",minHeight:"100vh",color:"#F0F4FF"}}>
       <style>{`
-        .lcta{background:linear-gradient(135deg,#0A66C2,#0284C7);color:#fff;border:none;padding:15px 40px;border-radius:50px;font-size:16px;font-weight:800;cursor:pointer;animation:pfglow 3s infinite;transition:transform .2s}.lcta:hover{transform:scale(1.03)}
-        .lsec{background:transparent;color:#38BDF8;border:1.5px solid #38BDF8;padding:8px 22px;border-radius:50px;font-size:13px;font-weight:700;cursor:pointer}.lsec:hover{background:rgba(56,189,248,.1)}
-        .lfc{transition:all .2s;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:22px}.lfc:hover{transform:translateY(-4px);border-color:rgba(56,189,248,.35)!important}
+        .lcta{background:linear-gradient(135deg,#0A66C2,#0284C7);color:#fff;border:none;padding:15px 40px;border-radius:50px;font-size:16px;font-weight:800;cursor:pointer;animation:pfglow 3s infinite;transition:transform .2s}
+        .lcta:hover{transform:scale(1.03)}
+        .lsec{background:transparent;color:#38BDF8;border:1.5px solid #38BDF8;padding:8px 22px;border-radius:50px;font-size:13px;font-weight:700;cursor:pointer}
+        .lsec:hover{background:rgba(56,189,248,.1)}
+        .lfc{transition:all .2s;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:22px}
+        .lfc:hover{transform:translateY(-4px);border-color:rgba(56,189,248,.35)!important}
         .u1{animation:pfup .5s .05s both}.u2{animation:pfup .5s .15s both}.u3{animation:pfup .5s .25s both}.u4{animation:pfup .5s .35s both}
       `}</style>
       <div style={{position:"fixed",inset:0,background:"radial-gradient(ellipse 80% 50% at 50% -10%,rgba(10,102,194,.2) 0%,transparent 60%)",pointerEvents:"none"}}/>
@@ -225,8 +188,8 @@ function Landing({onLaunch}) {
           <br/>in 3 minutes
         </h1>
         <p className="u3" style={{fontSize:17,color:"#94A3B8",maxWidth:520,margin:"0 auto 34px",lineHeight:1.65}}>
-          Topic research · Storytelling drafts · Advanced carousel PPT · Free stock photos<br/>
-          Paste your own draft — or let AI write from scratch.
+          Topic research · Storytelling drafts · Advanced carousel PPT · AI-generated cover images<br/>
+          Paste your draft — or let AI write from scratch.
         </p>
         <div className="u4">
           <button className="lcta" onClick={onLaunch}>Start Creating Free →</button>
@@ -235,15 +198,21 @@ function Landing({onLaunch}) {
       </div>
       <div style={{maxWidth:900,margin:"0 auto 70px",padding:"0 24px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16}}>
         {[
-          ["🔥","Trending Topics","AI suggests 6 ideas per niche, or bring your own draft"],
+          ["🔥","Trending Topics","6 AI-curated ideas per niche, or bring your own draft"],
           ["✍️","Storytelling Posts","Hook → story → lessons → CTA. Edit with AI in one click"],
           ["📊","Advanced PPT Carousel","Pro-grade branded slides with stats, tips, gradients"],
-          ["🎨","AI Image Generation","DALL-E 3, GPT Image, FLUX, Gemini & Imagen 4 — free, no API key needed"],
+          ["🎨","AI Cover Images","Gemini AI + Pollinations FLUX — free, no extra signup"],
           ["🔑","Your Key, Your Data","Free Gemini key. Nothing stored on any server"],
           ["🚀","One-File Deploy","Single HTML → Vercel → live site in 5 minutes"],
-        ].map(([ic,t,d])=>(
-          <div key={t} className="lfc"><div style={{fontSize:28,marginBottom:10}}>{ic}</div><div style={{fontWeight:800,fontSize:14,marginBottom:5,color:"#E2E8F0"}}>{t}</div><div style={{color:"#64748B",fontSize:13,lineHeight:1.55}}>{d}</div></div>
-        ))}
+        ].map(function(item) {
+          return (
+            <div key={item[1]} className="lfc">
+              <div style={{fontSize:28,marginBottom:10}}>{item[0]}</div>
+              <div style={{fontWeight:800,fontSize:14,marginBottom:5,color:"#E2E8F0"}}>{item[1]}</div>
+              <div style={{color:"#64748B",fontSize:13,lineHeight:1.55}}>{item[2]}</div>
+            </div>
+          );
+        })}
       </div>
       <div style={{textAlign:"center",borderTop:"1px solid rgba(255,255,255,.06)",padding:"44px 24px"}}>
         <button className="lcta" onClick={onLaunch}>Open PostFlow AI →</button>
@@ -253,241 +222,145 @@ function Landing({onLaunch}) {
   );
 }
 
-/* ══ MAIN TOOL ══ */
-function Tool({onHome}) {
-  // Keys
-  const [geminiKey,  setGeminiKey]  = useState(()=>localStorage.getItem("pf_gkey")||"");
-  const [pexelsKey,  setPexelsKey]  = useState(()=>localStorage.getItem("pf_pkey")||"");
-  const [keysSaved,  setKeysSaved]  = useState(()=>!!localStorage.getItem("pf_gkey"));
+/* ─── Main Tool ─── */
+function Tool({ onHome }) {
+  const [geminiKey,  setGeminiKey]  = useState(function(){ return localStorage.getItem("pf_gkey") || ""; });
+  const [keysSaved,  setKeysSaved]  = useState(function(){ return !!localStorage.getItem("pf_gkey"); });
   const [showKey,    setShowKey]    = useState(false);
-
-  // Idea / draft input
-  const [userDraft,  setUserDraft]  = useState(""); // user's own draft or idea
-
-  // Topic flow
+  const [userDraft,  setUserDraft]  = useState("");
   const [domain,     setDomain]     = useState("");
   const [custom,     setCustom]     = useState("");
   const [topics,     setTopics]     = useState([]);
   const [selected,   setSelected]   = useState(null);
-
-  // Post
   const [post,       setPost]       = useState("");
   const [tags,       setTags]       = useState("");
-  const [changeReq,  setChangeReq]  = useState(""); // user's change request
+  const [changeReq,  setChangeReq]  = useState("");
   const [showChange, setShowChange] = useState(false);
-
-  // PPT
   const [pptSlides,  setPptSlides]  = useState(null);
   const [pptBlob,    setPptBlob]    = useState(null);
-
-  // Images
-  const [photos,     setPhotos]     = useState([]);
-  const [pickedImg,  setPickedImg]  = useState(null);
-  const [imgQuery,   setImgQuery]   = useState("");
-
-  // AI image generation
-  const [imgMode,    setImgMode]    = useState("gemini"); // "gemini" or "pollinations"
+  const [imgMode,    setImgMode]    = useState("pollinations");
   const [imgPrompt,  setImgPrompt]  = useState("");
   const [genImgSrc,  setGenImgSrc]  = useState(null);
-  const [imgUsed,    setImgUsed]    = useState("");  // which service actually worked
+  const [imgUsed,    setImgUsed]    = useState("");
+  const [step,       setStep]       = useState(1);
+  const [busy,       setBusy]       = useState({});
+  const [msgs,       setMsgs]       = useState({});
+  const [copied,     setCopied]     = useState(false);
 
-  const [step,  setStep]  = useState(1);
-  const [busy,  setBusy]  = useState({});
-  const [msgs,  setMsgs]  = useState({});
-  const [copied,setCopied]= useState(false);
-
-  const sb=(k,v)=>setBusy(p=>({...p,[k]:v}));
-  const sm=(k,v)=>setMsgs(p=>({...p,[k]:v}));
+  function sb(k, v) { setBusy(function(p){ var n={};Object.assign(n,p);n[k]=v;return n; }); }
+  function sm(k, v) { setMsgs(function(p){ var n={};Object.assign(n,p);n[k]=v;return n; }); }
 
   function saveKeys() {
-    if (!geminiKey.trim()||geminiKey.trim().length<10){sm("keys","⚠️ Enter a valid Gemini key (starts with AIza...)");return;}
-    localStorage.setItem("pf_gkey",geminiKey.trim());
-    if(pexelsKey.trim()) localStorage.setItem("pf_pkey",pexelsKey.trim());
+    if (!geminiKey.trim() || geminiKey.trim().length < 10) { sm("keys","⚠️ Enter a valid Gemini key (starts with AIza...)"); return; }
+    localStorage.setItem("pf_gkey", geminiKey.trim());
     setKeysSaved(true);
     sm("keys","✅ Saved! Ready to create.");
   }
 
   async function getTopics() {
-    if (!domain&&!custom.trim()){sm("topics","⚠️ Choose a domain or type a topic.");return;}
-    sb("topics",true);sm("topics","");
+    if (!domain && !custom.trim()) { sm("topics","⚠️ Choose a domain or type a topic."); return; }
+    sb("topics",true); sm("topics","");
     try {
-      // Include user draft/idea as extra context if provided
-      const draftCtx = userDraft.trim()
-        ? `\n\nThe user has provided this draft or idea as starting context — use it to make suggestions more relevant:\n"""\n${userDraft.trim()}\n"""`
-        : "";
-      const ctx = custom.trim() ? `Custom topic: "${custom}"` : `Domain: "${domain}"`;
-      const raw = await aiText(
-        `Generate 6 trending, high-engagement LinkedIn post ideas for ${ctx}.${draftCtx}\nReturn ONLY a JSON array, no markdown:\n[{"title":"...","hook":"...","why":"...","emoji":"...","angle":"..."}]`,
-        geminiKey
-      );
-      const parsed = parseJSON(raw);
-      if(parsed&&parsed.length){setTopics(parsed);setStep(2);sm("topics","");}
+      var draftCtx = userDraft.trim() ? '\n\nUser context/draft:\n"""\n' + userDraft.trim() + '\n"""' : "";
+      var ctx = custom.trim() ? 'Custom topic: "' + custom + '"' : 'Domain: "' + domain + '"';
+      var raw = await aiText('Generate 6 trending LinkedIn post ideas for ' + ctx + '.' + draftCtx + '\nReturn ONLY a JSON array:\n[{"title":"...","hook":"...","why":"...","emoji":"...","angle":"..."}]', geminiKey);
+      var parsed = parseJSON(raw);
+      if (parsed && parsed.length) { setTopics(parsed); setStep(2); sm("topics",""); }
       else sm("topics","⚠️ Could not read response — please try again.");
-    } catch(e){sm("topics",`❌ ${e.message}`);}
+    } catch(e) { sm("topics","❌ " + e.message); }
     sb("topics",false);
   }
 
-  function pick(t){
-    setSelected(t);setPost("");setTags("");setPptSlides(null);setPptBlob(null);setPhotos([]);setPickedImg(null);setShowChange(false);setChangeReq("");
+  function pick(t) {
+    setSelected(t); setPost(""); setTags(""); setPptSlides(null); setPptBlob(null); setGenImgSrc(null); setShowChange(false); setChangeReq("");
   }
-  function useDirect(){
-    if(!custom.trim())return;
-    pick({title:custom.trim(),hook:"Your topic",why:"Custom",emoji:"✍️",angle:"custom"});
-    setTopics([]);setStep(2);
+  function useDirect() {
+    if (!custom.trim()) return;
+    pick({ title:custom.trim(), hook:"Your topic", why:"Custom", emoji:"✍️", angle:"custom" });
+    setTopics([]); setStep(2);
   }
 
-  // Draft from user's own draft/idea OR from selected topic
-  async function draftPost(isRefinement=false){
-    if(!selected&&!userDraft.trim()&&!isRefinement)return;
-    sb("post",true);sm("post","");
+  async function draftPost(isRefinement) {
+    sb("post",true); sm("post","");
     try {
-      let prompt;
+      var prompt;
       if (isRefinement && changeReq.trim()) {
-        // AI refine based on user's change request
-        prompt = `You previously wrote this LinkedIn post:\n"""\n${post}\n"""\n\nThe user wants these changes: "${changeReq.trim()}"\n\nRewrite the post applying those changes. Keep the same storytelling format (hook → story → lessons → CTA). Return ONLY the updated post text, no explanation.`;
-      } else if (userDraft.trim() && (!selected || selected.angle==="custom")) {
-        // Polish/enhance the user's own draft
-        prompt = `The user has provided this LinkedIn post draft or idea:\n"""\n${userDraft.trim()}\n"""\n\nEnhance and polish it into a full viral LinkedIn post using this format:\n1. One bold punchy hook line (keep or improve theirs)\n2. 2-3 sentences of personal story/insight\n3. Exactly 3 numbered lessons or tips\n4. Soft CTA (not salesy)\n\nLength: 180-240 words. Conversational, first person. Blank line between each section.\nReturn ONLY the post text, no explanation.`;
+        prompt = 'You wrote this LinkedIn post:\n"""\n' + post + '\n"""\nUser wants these changes: "' + changeReq.trim() + '"\nRewrite applying those changes. Keep storytelling format. Return ONLY the updated post.';
+      } else if (userDraft.trim() && selected && selected.angle === "own-draft") {
+        prompt = 'Polish this LinkedIn draft into a viral post:\n"""\n' + userDraft.trim() + '\n"""\nFormat: 1) Bold hook line 2) 2-3 sentences story 3) 3 numbered lessons 4) Soft CTA\nLength: 180-240 words. First person. Blank lines between sections. Return ONLY the post.';
       } else {
-        // Normal topic-based draft
-        const draftCtx = userDraft.trim()
-          ? `\n\nAdditional context from the user:\n"""\n${userDraft.trim()}\n"""`
-          : "";
-        prompt = `Write a LinkedIn post about: "${selected.title}" (angle: ${selected.angle||"storytelling"}).${draftCtx}\nFormat:\n1. One bold punchy hook line\n2. 2-3 sentences personal story/insight\n3. Exactly 3 numbered lessons\n4. Soft CTA (not salesy)\nLength: 180-240 words. Conversational, first person. Blank line between sections.`;
+        var draftCtx = userDraft.trim() ? '\n\nExtra context from user:\n"""\n' + userDraft.trim() + '\n"""' : "";
+        prompt = 'Write a LinkedIn post about: "' + (selected ? selected.title : "LinkedIn") + '" (angle: ' + (selected ? selected.angle || "storytelling" : "storytelling") + ').' + draftCtx + '\nFormat: 1) Bold hook 2) 2-3 sentences story 3) 3 numbered lessons 4) Soft CTA\nLength: 180-240 words. First person. Blank lines between sections. Return ONLY the post.';
       }
-
-      const [p, t] = await Promise.all([
-        aiText(prompt, geminiKey),
-        tags ? Promise.resolve(tags) : aiText(`Give exactly 5 LinkedIn hashtags for: "${selected?.title || 'LinkedIn content'}". Return ONLY hashtags separated by spaces, nothing else.`, geminiKey),
-      ]);
+      var p = await aiText(prompt, geminiKey);
+      var t = tags || await aiText('Give exactly 5 LinkedIn hashtags for: "' + (selected ? selected.title : "LinkedIn") + '". Return ONLY hashtags separated by spaces.', geminiKey);
       setPost(p); setTags(t.trim());
-      setImgQuery(selected?.title || (userDraft.trim().slice(0,40)) || "professional");
-      setShowChange(false); setChangeReq("");
-      setStep(3);
-    } catch(e){sm("post",`❌ ${e.message}`);}
+      setImgPrompt("Professional LinkedIn cover for: " + (selected ? selected.title : "LinkedIn content") + ". Modern minimal style, dark navy background, blue accent lighting, no text in image.");
+      setShowChange(false); setChangeReq(""); setStep(3);
+    } catch(e) { sm("post","❌ " + e.message); }
     sb("post",false);
   }
 
   async function draftFromOwnIdea() {
-    if (!userDraft.trim()) { sm("draft","⚠️ Please write your idea or draft in the box above first."); return; }
-    pick({ title: userDraft.trim().slice(0,60), hook:"Your draft", why:"Your idea", emoji:"✍️", angle:"own-draft" });
+    if (!userDraft.trim()) { sm("draft","⚠️ Write your idea or draft in the box first."); return; }
+    var t = { title:userDraft.trim().slice(0,60), hook:"Your draft", why:"Your idea", emoji:"✍️", angle:"own-draft" };
+    pick(t);
     setTopics([]); setStep(2);
-    // immediately draft
-    sb("post",true); sm("post","");
-    try {
-      const [p,t] = await Promise.all([
-        aiText(`The user has provided this LinkedIn post draft or idea:\n"""\n${userDraft.trim()}\n"""\n\nEnhance and polish it into a full viral LinkedIn post:\n1. One bold punchy hook line\n2. 2-3 sentences personal story/insight\n3. Exactly 3 numbered lessons\n4. Soft CTA (not salesy)\nLength: 180-240 words. Conversational, first person. Blank line between sections.\nReturn ONLY the post text.`, geminiKey),
-        aiText(`Give 5 LinkedIn hashtags for this topic: "${userDraft.trim().slice(0,80)}". Return ONLY hashtags separated by spaces.`, geminiKey),
-      ]);
-      setPost(p); setTags(t.trim());
-      setImgQuery(userDraft.trim().slice(0,40));
-      setStep(3);
-    } catch(e) { sm("post",`❌ ${e.message}`); }
-    sb("post",false);
+    await draftPost(false);
   }
 
-  async function genPPT(){
-    const Lib=window.PptxGenJS;
-    if(!Lib){sm("ppt","❌ PPT library not loaded. Please refresh the page.");return;}
-    sb("ppt",true);sm("ppt","🤖 AI is crafting your slide content...");
-    try{
-      const topicTitle = selected?.title || userDraft.trim().slice(0,60) || "LinkedIn Insights";
-      const raw=await aiText(
-        `Create a professional 6-slide LinkedIn carousel about: "${topicTitle}"\n\nIMPORTANT: Return ONLY valid JSON, absolutely no markdown, no explanation:\n{\n"title":"compelling carousel title (max 8 words)",\n"slides":[\n  {"heading":"attention-grabbing title for the carousel","body":"one-line compelling subtitle"},\n  {"heading":"slide 2 heading (max 8 words)","body":"explanation in 40-55 words","label":"Section Name","stat":"a real statistic like 73%","statLabel":"2-3 word description of what this stat means and why it matters","takeaway":"one key insight in 10 words"},\n  {"heading":"slide 3 heading","body":"explanation in 40-55 words","label":"Section Name","tip":"one highly actionable pro tip in 30-40 words","takeaway":"key insight in 10 words"},\n  {"heading":"slide 4 heading","body":"explanation in 40-55 words","label":"Section Name","stat":"another compelling stat","statLabel":"explanation of the stat","takeaway":"key insight in 10 words"},\n  {"heading":"slide 5 heading","body":"explanation in 40-55 words","label":"Section Name","tip":"another actionable pro tip in 30-40 words","takeaway":"key insight in 10 words"},\n  {"heading":"powerful CTA heading (max 10 words)","body":"compelling closing message encouraging them to follow, 20-30 words"}\n]}`,
-        geminiKey
-      );
-      const parsed=parseJSON(raw);
-      if(!parsed?.slides||parsed.slides.length<6){sm("ppt","⚠️ Could not parse slides. Trying again...");sb("ppt",false);return;}
+  async function genPPT() {
+    if (!window.PptxGenJS) { sm("ppt","❌ PPT library not loaded. Please refresh the page."); return; }
+    sb("ppt",true); sm("ppt","🤖 AI is crafting your slides...");
+    try {
+      var topicTitle = (selected ? selected.title : null) || userDraft.trim().slice(0,60) || "LinkedIn Insights";
+      var raw = await aiText('Create a professional 6-slide LinkedIn carousel about: "' + topicTitle + '"\nReturn ONLY valid JSON:\n{"title":"carousel title max 8 words","slides":[\n{"heading":"title slide heading","body":"subtitle"},\n{"heading":"slide heading","body":"45-55 words","label":"Section","stat":"73%","statLabel":"what this means in 2-3 words","takeaway":"key insight 10 words"},\n{"heading":"slide heading","body":"45-55 words","label":"Section","tip":"actionable tip 30-40 words","takeaway":"key insight 10 words"},\n{"heading":"slide heading","body":"45-55 words","label":"Section","stat":"another stat","statLabel":"explanation","takeaway":"key insight 10 words"},\n{"heading":"slide heading","body":"45-55 words","label":"Section","tip":"another tip","takeaway":"key insight 10 words"},\n{"heading":"CTA heading","body":"follow message 20-30 words"}\n]}', geminiKey);
+      var parsed = parseJSON(raw);
+      if (!parsed || !parsed.slides || parsed.slides.length < 6) { sm("ppt","⚠️ Could not parse slides. Please try again."); sb("ppt",false); return; }
       setPptSlides(parsed.slides);
-      sm("ppt","📊 Rendering your advanced PowerPoint...");
-      const blob=await buildPPTX(parsed.slides, parsed.title||topicTitle, topicTitle);
+      sm("ppt","📊 Rendering your PowerPoint...");
+      var blob = await buildPPTX(parsed.slides, parsed.title || topicTitle);
       setPptBlob(blob);
       sm("ppt","✅ Done! Click the green Download button.");
-    }catch(e){sm("ppt",`❌ ${e.message}`);}
+    } catch(e) { sm("ppt","❌ " + e.message); }
     sb("ppt",false);
   }
 
-  function dlPPT(){
-    if(!pptBlob)return;
-    const url=URL.createObjectURL(pptBlob);
-    const a=document.createElement("a");
-    a.href=url;a.download=`${(selected?.title||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-")}.pptx`;
-    a.click();URL.revokeObjectURL(url);
+  function dlPPT() {
+    if (!pptBlob) return;
+    var url = URL.createObjectURL(pptBlob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = ((selected ? selected.title : "carousel") || "carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-") + ".pptx";
+    a.click(); URL.revokeObjectURL(url);
   }
 
-
-
-  // Auto-generate image prompt from topic
-  async function autoPrompt(){
+  async function autoPrompt() {
     sb("imgPrompt",true);
     try {
-      const topic = selected?.title || userDraft.trim().slice(0,60) || "professional LinkedIn";
-      const p = await aiText(
-        `Write a concise image generation prompt for a LinkedIn cover image about: "${topic}".
-Style: modern, minimal, professional. No text or words in image. Landscape 16:9.
-Include: color palette (blues/dark tones), lighting, mood, key visual elements.
-Return ONLY the prompt in 1-2 sentences, nothing else.`,
-        geminiKey
-      );
+      var topic = (selected ? selected.title : null) || userDraft.trim().slice(0,60) || "professional LinkedIn";
+      var p = await aiText('Write a concise image generation prompt for a LinkedIn cover about: "' + topic + '".\nStyle: modern, minimal, professional. No text/words in image. 16:9 landscape.\nInclude: color palette (dark navy/blue), mood, lighting, key visual elements.\nReturn ONLY the prompt in 1-2 sentences.', geminiKey);
       setImgPrompt(p.trim());
-    } catch(e){ sm("img","❌ Could not generate prompt: " + e.message); }
+    } catch(e) { sm("img","❌ Could not generate prompt: " + e.message); }
     sb("imgPrompt",false);
   }
 
-  // Option B: Gemini image generation (uses user's own free Gemini key)
-  async function tryGemini(prompt) {
-    const model = "gemini-2.0-flash-preview-image-generation";
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-      { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          contents:[{ parts:[{ text: prompt }] }],
-          generationConfig:{ responseModalities:["TEXT","IMAGE"] }
-        })
-      }
-    );
-    const d = await res.json();
-    if (d.error) throw new Error(d.error.message);
-    const parts = d.candidates?.[0]?.content?.parts || [];
-    const imgPart = parts.find(p => p.inlineData?.mimeType?.startsWith("image/"));
-    if (!imgPart) throw new Error("No image in Gemini response");
-    return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
-  }
-
-  // Option C: Pollinations.ai (completely free, no key, no login needed)
-  async function tryPollinations(prompt) {
-    const encoded = encodeURIComponent(prompt);
-    // Pollinations returns image directly as a URL — add timestamp to bust cache
-    const url = `https://image.pollinations.ai/prompt/${encoded}?width=1200&height=675&model=flux&nologo=true&seed=${Date.now()}`;
-    // Verify it loads
-    await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = resolve;
-      img.onerror = () => reject(new Error("Pollinations image failed to load"));
-      img.src = url;
-    });
-    return url;
-  }
-
-  async function generateImg(){
-    if(!imgPrompt.trim()) return;
+  async function generateImg() {
+    if (!imgPrompt.trim()) return;
     setGenImgSrc(null); setImgUsed("");
     sb("img",true); sm("img","");
-
     if (imgMode === "gemini") {
-      // Try Gemini first, fall back to Pollinations
       if (!geminiKey) {
-        sm("img","⚠️ No Gemini key found — falling back to Pollinations (free, no key needed)...");
+        sm("img","⚠️ No Gemini key — switching to Pollinations...");
         await runPollinations();
       } else {
         try {
-          sm("img","🤖 Generating with Gemini... (~10-20s)");
-          const src = await tryGemini(imgPrompt.trim());
-          setGenImgSrc(src);
-          setImgUsed("Gemini");
-          sm("img","✅ Generated with Gemini AI!");
+          sm("img","🤖 Generating with Gemini AI... (~15-25s)");
+          var src = await geminiImage(imgPrompt.trim(), geminiKey);
+          setGenImgSrc(src); setImgUsed("Gemini AI");
+          sm("img","✅ Generated with Gemini!");
         } catch(e) {
-          sm("img","⚠️ Gemini image not available on your key — switching to Pollinations (free)...");
+          sm("img","⚠️ Gemini image not available — switching to Pollinations (free fallback)...");
           await runPollinations();
         }
       }
@@ -498,48 +371,51 @@ Return ONLY the prompt in 1-2 sentences, nothing else.`,
   }
 
   async function runPollinations() {
+    sm("img","🎨 Generating with Pollinations FLUX... (~15-20s)");
+    var url = pollinationsUrl(imgPrompt.trim());
     try {
-      sm("img","🎨 Generating with Pollinations AI (FLUX model)... (~10-20s)");
-      const src = await tryPollinations(imgPrompt.trim());
-      setGenImgSrc(src);
-      setImgUsed("Pollinations (FLUX)");
-      sm("img","✅ Generated with Pollinations AI — free, no key needed!");
+      await new Promise(function(resolve, reject) {
+        var img = new Image();
+        img.onload = resolve;
+        img.onerror = function(){ reject(new Error("Image failed to load")); };
+        img.src = url;
+      });
+      setGenImgSrc(url); setImgUsed("Pollinations FLUX");
+      sm("img","✅ Generated! Free — no key needed.");
     } catch(e) {
-      sm("img","❌ Both Gemini and Pollinations failed. Try rephrasing your prompt or check your internet connection.");
+      sm("img","❌ Both services failed. Check your internet or try rephrasing the prompt.");
     }
   }
 
-  function downloadImg(){
-    if(!genImgSrc) return;
-    // For base64 (Gemini): direct download. For URL (Pollinations): open in new tab
-    if(genImgSrc.startsWith("data:")) {
-      const a = document.createElement("a");
-      a.href = genImgSrc; a.download = "linkedin-cover.png"; a.click();
+  function downloadImg() {
+    if (!genImgSrc) return;
+    if (genImgSrc.startsWith("data:")) {
+      var a = document.createElement("a"); a.href = genImgSrc; a.download = "linkedin-cover.png"; a.click();
     } else {
       window.open(genImgSrc, "_blank");
     }
   }
 
-  function copyAll(){
-    navigator.clipboard.writeText(post+(tags?"\n\n"+tags:""));
-    setCopied(true);setTimeout(()=>setCopied(false),2200);
-  }
-  function reset(){
-    setStep(1);setDomain("");setCustom("");setUserDraft("");setTopics([]);setSelected(null);
-    setPost("");setTags("");setPptSlides(null);setPptBlob(null);
-    setPhotos([]);setPickedImg(null);setImgQuery("");setMsgs({});setShowChange(false);setChangeReq("");
+  function copyAll() {
+    navigator.clipboard.writeText(post + (tags ? "\n\n" + tags : ""));
+    setCopied(true); setTimeout(function(){ setCopied(false); }, 2200);
   }
 
-  // Styles
-  const card={background:"#fff",borderRadius:20,padding:"22px 26px",boxShadow:"0 2px 14px rgba(0,0,0,.06)",marginBottom:16,animation:"pfup .3s ease"};
-  const bb={border:"none",borderRadius:50,fontWeight:700,cursor:"pointer",transition:"all .18s",fontSize:13,display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px"};
-  const bP={...bb,background:"#0A66C2",color:"#fff"};
-  const bO={...bb,background:"#fff",color:"#0A66C2",border:"2px solid #0A66C2"};
-  const bG={...bb,background:"#16A34A",color:"#fff"};
-  const bV={...bb,background:"#7C3AED",color:"#fff"};
-  const bA={...bb,background:"#F59E0B",color:"#fff"};
-  const inp={padding:"10px 13px",border:"1.5px solid #E2E8F0",borderRadius:11,fontSize:14,outline:"none",width:"100%",color:"#1E293B",background:"#fff"};
-  const ta={...inp,resize:"vertical",lineHeight:1.7};
+  function reset() {
+    setStep(1); setDomain(""); setCustom(""); setUserDraft(""); setTopics([]); setSelected(null);
+    setPost(""); setTags(""); setPptSlides(null); setPptBlob(null);
+    setGenImgSrc(null); setImgPrompt(""); setImgUsed(""); setMsgs({}); setShowChange(false); setChangeReq("");
+  }
+
+  var card = {background:"#fff",borderRadius:20,padding:"22px 26px",boxShadow:"0 2px 14px rgba(0,0,0,.06)",marginBottom:16,animation:"pfup .3s ease"};
+  var bb   = {border:"none",borderRadius:50,fontWeight:700,cursor:"pointer",transition:"all .18s",fontSize:13,display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px"};
+  var bP   = Object.assign({},bb,{background:"#0A66C2",color:"#fff"});
+  var bO   = Object.assign({},bb,{background:"#fff",color:"#0A66C2",border:"2px solid #0A66C2"});
+  var bG   = Object.assign({},bb,{background:"#16A34A",color:"#fff"});
+  var bV   = Object.assign({},bb,{background:"#7C3AED",color:"#fff"});
+  var bA   = Object.assign({},bb,{background:"#F59E0B",color:"#fff"});
+  var inp  = {padding:"10px 13px",border:"1.5px solid #E2E8F0",borderRadius:11,fontSize:14,outline:"none",width:"100%",color:"#1E293B",background:"#fff"};
+  var ta   = Object.assign({},inp,{resize:"vertical",lineHeight:1.7});
 
   return (
     <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:"#F1F5F9",minHeight:"100vh",paddingBottom:70}}>
@@ -556,15 +432,15 @@ Return ONLY the prompt in 1-2 sentences, nothing else.`,
       {/* Progress */}
       <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:"12px 0"}}>
         <div style={{maxWidth:700,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center"}}>
-          {["Keys","Idea / Topic","Post","Assets"].map((s,i)=>{
-            const n=i+1,done=step>n,active=step===n;
+          {["Keys","Idea / Topic","Post","Assets"].map(function(s,i){
+            var n=i+1,done=step>n,active=step===n;
             return (
               <React.Fragment key={s}>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
                   <div style={{width:26,height:26,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,background:done?"#0A66C2":active?"#fff":"#F1F5F9",color:done?"#fff":active?"#0A66C2":"#94A3B8",border:active?"2px solid #0A66C2":"none",transition:"all .3s"}}>{done?"✓":n}</div>
                   <span style={{fontSize:10,color:active?"#0A66C2":"#94A3B8",fontWeight:active?700:400,whiteSpace:"nowrap"}}>{s}</span>
                 </div>
-                {i<3&&<div style={{flex:1,height:2,background:step>n?"#0A66C2":"#E2E8F0",margin:"0 5px",marginBottom:14,transition:"background .4s"}}/>}
+                {i<3 && <div style={{flex:1,height:2,background:step>n?"#0A66C2":"#E2E8F0",margin:"0 5px",marginBottom:14,transition:"background .4s"}}/>}
               </React.Fragment>
             );
           })}
@@ -577,177 +453,161 @@ Return ONLY the prompt in 1-2 sentences, nothing else.`,
         <div style={card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
             <div>
-              <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🔑 API Keys</h2>
-              <p style={{margin:0,color:"#64748B",fontSize:13}}>Keys stay in your browser only — never sent anywhere except Google & Pexels.</p>
+              <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🔑 Gemini API Key</h2>
+              <p style={{margin:0,color:"#64748B",fontSize:13}}>Your key stays in your browser only — never sent anywhere except Google.</p>
             </div>
-            {keysSaved&&<span style={{background:"#F0FDF4",color:"#15803D",fontSize:12,fontWeight:700,padding:"4px 12px",borderRadius:20}}>✓ Saved</span>}
+            {keysSaved && <span style={{background:"#F0FDF4",color:"#15803D",fontSize:12,fontWeight:700,padding:"4px 12px",borderRadius:20}}>✓ Saved</span>}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:14}}>
-            <div>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>
-                Gemini Key (required) · <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2",textTransform:"none",fontWeight:400}}>aistudio.google.com</a>
-              </label>
-              <div style={{position:"relative"}}>
-                <input type={showKey?"text":"password"} placeholder="AIza..." value={geminiKey} onChange={e=>{setGeminiKey(e.target.value);setKeysSaved(false);sm("keys","");}} style={inp}/>
-                <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14}}>{showKey?"🙈":"👁️"}</button>
-              </div>
-              <div style={{fontSize:11,color:"#94A3B8",marginTop:3}}>Free · Powers all AI features</div>
-            </div>
-            <div>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>
-                Pexels Key (optional) · <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2",textTransform:"none",fontWeight:400}}>pexels.com/api</a>
-              </label>
-              <input type="password" placeholder="Leave blank — photos work without it" value={pexelsKey} onChange={e=>setPexelsKey(e.target.value)} style={inp}/>
-              <div style={{fontSize:11,color:"#94A3B8",marginTop:3}}>Optional · Better photo search</div>
-            </div>
+          <div style={{marginTop:14,position:"relative"}}>
+            <input type={showKey?"text":"password"} placeholder="AIza..." value={geminiKey}
+              onChange={function(e){ setGeminiKey(e.target.value); setKeysSaved(false); sm("keys",""); }} style={inp}/>
+            <button onClick={function(){ setShowKey(function(p){return !p;}); }} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14}}>{showKey?"🙈":"👁️"}</button>
           </div>
-          <button style={{...bP,marginTop:14}} onClick={saveKeys}>Save & Continue →</button>
-          {msgs.keys&&<Notice type={msgs.keys.startsWith("✅")?"success":"warn"}>{msgs.keys}</Notice>}
-          {!keysSaved&&(
-            <div style={{marginTop:14,padding:"12px 14px",background:"#F8FAFC",borderRadius:12,border:"1px solid #E2E8F0",fontSize:13,color:"#475569",lineHeight:1.8}}>
-              <strong style={{color:"#0F172A"}}>Get your free Gemini key (60 sec):</strong><br/>
-              1. Open <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2"}}>aistudio.google.com/app/apikey</a><br/>
-              2. Sign in with Google → click <strong>"Create API Key"</strong><br/>
-              3. Copy and paste it above → click <strong>Save & Continue</strong>
-            </div>
-          )}
+          <div style={{marginTop:6,fontSize:12,color:"#94A3B8"}}>
+            Get your free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color:"#0A66C2"}}>aistudio.google.com/app/apikey</a> → Sign in → Create API Key
+          </div>
+          <button style={Object.assign({},bP,{marginTop:14})} onClick={saveKeys}>Save & Continue →</button>
+          {msgs.keys && <Notice type={msgs.keys.startsWith("✅")?"success":"warn"}>{msgs.keys}</Notice>}
         </div>
 
-        {/* ── IDEA / DRAFT INPUT ── */}
+        {/* ── IDEA / DRAFT ── */}
         <div style={card}>
-          <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>💡 Your Idea or Existing Draft</h2>
+          <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>💡 Your Idea or Draft</h2>
           <p style={{margin:"0 0 12px",color:"#64748B",fontSize:13}}>
-            Already have an idea, rough draft, or notes? Paste them here — AI will polish and enhance them.
-            <br/><span style={{color:"#94A3B8"}}>Or leave this blank and let AI suggest topics below.</span>
+            Have a rough idea or existing draft? Paste it here — AI will polish it.<br/>
+            <span style={{color:"#94A3B8"}}>Or leave blank and use AI topic suggestions below.</span>
           </p>
-          <textarea
-            value={userDraft}
-            onChange={e=>setUserDraft(e.target.value)}
-            placeholder={"Paste your draft, rough notes, or idea here...\n\nExamples:\n• 'I want to write about how I grew my LinkedIn to 5k followers in 6 months'\n• A rough draft you already wrote\n• Key points you want to cover\n• A story you want to tell"}
-            style={{...ta,minHeight:120,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}
-          />
-          {userDraft.trim()&&(
-            <div style={{marginTop:10,display:"flex",gap:9,flexWrap:"wrap"}}>
-              <button style={bA} onClick={draftFromOwnIdea} disabled={busy.post||!geminiKey}>
-                {busy.post?<><Spin/>Enhancing your draft...</>:"✨ Polish & Enhance My Draft"}
+          <textarea value={userDraft} onChange={function(e){setUserDraft(e.target.value);}} placeholder={"Examples:\n• 'I want to write about growing LinkedIn to 5k followers in 6 months'\n• A rough draft you already wrote\n• Key points or bullet notes you want covered"} style={Object.assign({},ta,{minHeight:110,background:"#FAFCFF",border:"1.5px solid #BFDBFE"})}/>
+          {userDraft.trim() && (
+            <div style={{marginTop:10,display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
+              <button style={Object.assign({},bA,{opacity:busy.post?0.6:1})} onClick={draftFromOwnIdea} disabled={busy.post}>
+                {busy.post ? <React.Fragment><Spin/>Enhancing...</React.Fragment> : "✨ Polish & Enhance My Draft"}
               </button>
-              <span style={{fontSize:12,color:"#64748B",alignSelf:"center"}}>— or scroll down to pick a niche for topic ideas</span>
+              <span style={{fontSize:12,color:"#64748B"}}>or pick a niche below for topic ideas</span>
             </div>
           )}
-          {msgs.draft&&<Notice type="warn">{msgs.draft}</Notice>}
+          {msgs.draft && <Notice type="warn">{msgs.draft}</Notice>}
         </div>
 
         {/* ── DOMAIN + TOPIC ── */}
         <div style={card}>
           <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🎯 Domain & Topic</h2>
           <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>
-            Pick a niche for AI topic suggestions — or type a specific topic and draft directly
-            {userDraft.trim()&&<span style={{color:"#0A66C2"}}> · Your draft above will be used as extra context</span>}
+            Pick a niche for AI suggestions · or type a topic and draft directly
+            {userDraft.trim() && <span style={{color:"#0A66C2"}}> · Your draft above will add context</span>}
           </p>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
             <div>
               <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Select Domain</label>
-              <select value={domain} onChange={e=>{setDomain(e.target.value);setTopics([]);setSelected(null);}} style={{...inp,cursor:"pointer"}}>
+              <select value={domain} onChange={function(e){ setDomain(e.target.value); setTopics([]); setSelected(null); }} style={Object.assign({},inp,{cursor:"pointer"})}>
                 <option value="">— Choose your niche —</option>
-                {DOMAINS.map(d=><option key={d} value={d}>{d}</option>)}
+                {DOMAINS.map(function(d){ return <option key={d} value={d}>{d}</option>; })}
               </select>
             </div>
             <div>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Or Type a Specific Topic</label>
-              <input type="text" placeholder="e.g. How I grew to 10k followers..." value={custom} onChange={e=>setCustom(e.target.value)} onKeyDown={e=>e.key==="Enter"&&useDirect()} style={inp}/>
+              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Or Type a Topic</label>
+              <input type="text" placeholder="e.g. How I grew to 10k followers..." value={custom}
+                onChange={function(e){setCustom(e.target.value);}}
+                onKeyDown={function(e){if(e.key==="Enter")useDirect();}}
+                style={inp}/>
             </div>
           </div>
           <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
-            <button style={{...bP,opacity:(!domain&&!custom.trim())||busy.topics?0.6:1}} onClick={getTopics} disabled={busy.topics||(!domain&&!custom.trim())}>
-              {busy.topics?<><Spin/>Finding topics...</>:"🔥 Get AI Topic Ideas"}
+            <button style={Object.assign({},bP,{opacity:(!domain&&!custom.trim())||busy.topics?0.6:1})} onClick={getTopics} disabled={busy.topics||(!domain&&!custom.trim())}>
+              {busy.topics ? <React.Fragment><Spin/>Finding topics...</React.Fragment> : "🔥 Get AI Topic Ideas"}
             </button>
-            {custom.trim()&&<button style={bO} onClick={useDirect}>✍️ Use This Topic Directly</button>}
+            {custom.trim() && <button style={bO} onClick={useDirect}>✍️ Use This Topic Directly</button>}
           </div>
-          {msgs.topics&&<Notice type="error">{msgs.topics}</Notice>}
+          {msgs.topics && <Notice type="error">{msgs.topics}</Notice>}
         </div>
 
         {/* ── TOPIC LIST ── */}
-        {step>=2&&topics.length>0&&(
+        {step >= 2 && topics.length > 0 && (
           <div style={card}>
             <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🔥 AI Topic Suggestions</h2>
-            <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Click one to select it · AI used your context to make these relevant</p>
-            {topics.map((t,i)=>(
-              <div key={i} onClick={()=>pick(t)} style={{border:`2px solid ${selected===t?"#0A66C2":"#E2E8F0"}`,borderRadius:13,padding:"13px 15px",cursor:"pointer",background:selected===t?"#EFF6FF":"#FAFCFF",marginBottom:9,transition:"all .2s"}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <div style={{fontWeight:700,color:"#0F172A",fontSize:14}}>{t.emoji} {t.title}</div>
-                  {selected===t&&<span style={{color:"#0A66C2",flexShrink:0}}>✓</span>}
+            <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Click one to select</p>
+            {topics.map(function(t,i){
+              return (
+                <div key={i} onClick={function(){pick(t);}}
+                  style={{border:"2px solid " + (selected===t?"#0A66C2":"#E2E8F0"),borderRadius:13,padding:"13px 15px",cursor:"pointer",background:selected===t?"#EFF6FF":"#FAFCFF",marginBottom:9,transition:"all .2s"}}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <div style={{fontWeight:700,color:"#0F172A",fontSize:14}}>{t.emoji} {t.title}</div>
+                    {selected === t && <span style={{color:"#0A66C2"}}>✓</span>}
+                  </div>
+                  <div style={{fontSize:12,color:"#475569",marginTop:4}}>💡 {t.hook}</div>
+                  <div style={{display:"flex",gap:12,marginTop:5,flexWrap:"wrap"}}>
+                    <span style={{fontSize:12,color:"#0A66C2"}}>📈 {t.why}</span>
+                    {t.angle && <span style={{fontSize:12,color:"#7C3AED"}}>🎯 {t.angle}</span>}
+                  </div>
                 </div>
-                <div style={{fontSize:12,color:"#475569",marginTop:4}}>💡 {t.hook}</div>
-                <div style={{display:"flex",gap:12,marginTop:5,flexWrap:"wrap"}}>
-                  <span style={{fontSize:12,color:"#0A66C2"}}>📈 {t.why}</span>
-                  {t.angle&&<span style={{fontSize:12,color:"#7C3AED"}}>🎯 {t.angle}</span>}
-                </div>
-              </div>
-            ))}
-            {selected&&<button style={{...bP,marginTop:8}} onClick={()=>draftPost(false)} disabled={busy.post}>{busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}</button>}
-            {msgs.post&&<Notice type="error">{msgs.post}</Notice>}
+              );
+            })}
+            {selected && (
+              <button style={Object.assign({},bP,{marginTop:8,opacity:busy.post?0.6:1})} onClick={function(){draftPost(false);}} disabled={busy.post}>
+                {busy.post ? <React.Fragment><Spin/>Drafting...</React.Fragment> : "✍️ Draft My Post →"}
+              </button>
+            )}
+            {msgs.post && <Notice type="error">{msgs.post}</Notice>}
           </div>
         )}
 
-        {/* custom topic row */}
-        {step>=2&&selected&&topics.length===0&&selected.angle!=="own-draft"&&(
+        {/* Custom topic card */}
+        {step >= 2 && selected && topics.length === 0 && selected.angle !== "own-draft" && (
           <div style={card}>
             <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:15,color:"#0F172A"}}>{selected.emoji} {selected.title}</div>
-                <div style={{fontSize:13,color:"#64748B",marginTop:3}}>Your custom topic</div>
+                <div style={{fontSize:13,color:"#64748B",marginTop:3}}>Your custom topic — ready to draft</div>
               </div>
-              <button style={bP} onClick={()=>draftPost(false)} disabled={busy.post}>{busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}</button>
+              <button style={Object.assign({},bP,{opacity:busy.post?0.6:1})} onClick={function(){draftPost(false);}} disabled={busy.post}>
+                {busy.post ? <React.Fragment><Spin/>Drafting...</React.Fragment> : "✍️ Draft My Post →"}
+              </button>
             </div>
-            {msgs.post&&<Notice type="error">{msgs.post}</Notice>}
+            {msgs.post && <Notice type="error">{msgs.post}</Notice>}
           </div>
         )}
 
         {/* ── POST EDITOR ── */}
-        {step>=3&&post&&(
+        {step >= 3 && post && (
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
               <div>
                 <h2 style={{margin:0,fontSize:18,color:"#0F172A"}}>✍️ Your LinkedIn Post</h2>
-                <p style={{margin:"3px 0 0",fontSize:13,color:"#64748B"}}>Edit freely · Use AI to make changes below</p>
+                <p style={{margin:"3px 0 0",fontSize:13,color:"#64748B"}}>Edit freely · Ask AI to make changes below</p>
               </div>
               <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-                <button style={bO} onClick={copyAll}>{copied?"✅ Copied!":"📋 Copy + Hashtags"}</button>
-                <a href="https://www.linkedin.com/feed/" target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}><button style={bP}>Open LinkedIn →</button></a>
+                <button style={bO} onClick={copyAll}>{copied ? "✅ Copied!" : "📋 Copy + Hashtags"}</button>
+                <a href="https://www.linkedin.com/feed/" target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>
+                  <button style={bP}>Open LinkedIn →</button>
+                </a>
               </div>
             </div>
-            <textarea value={post} onChange={e=>setPost(e.target.value)} style={{...ta,minHeight:220}}/>
-            {tags&&<div style={{marginTop:10,padding:"10px 14px",background:"#EFF6FF",borderRadius:10,fontSize:13,color:"#1D4ED8"}}>{tags}</div>}
+            <textarea value={post} onChange={function(e){setPost(e.target.value);}} style={Object.assign({},ta,{minHeight:220})}/>
+            {tags && <div style={{marginTop:10,padding:"10px 14px",background:"#EFF6FF",borderRadius:10,fontSize:13,color:"#1D4ED8"}}>{tags}</div>}
             <div style={{marginTop:7,fontSize:12,color:"#94A3B8"}}>{post.split(/\s+/).filter(Boolean).length} words</div>
 
-            {/* ── AI CHANGES BOX ── */}
+            {/* AI Changes */}
             <div style={{marginTop:18,borderTop:"1px solid #E2E8F0",paddingTop:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                 <div>
                   <div style={{fontWeight:700,fontSize:14,color:"#0F172A"}}>🤖 Ask AI to Make Changes</div>
-                  <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Tell AI what to change — it will rewrite the post keeping the format</div>
+                  <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Tell AI what to change — it rewrites instantly</div>
                 </div>
-                <button onClick={()=>setShowChange(p=>!p)} style={{...bO,padding:"6px 14px",fontSize:12}}>
-                  {showChange?"▲ Hide":"✏️ Request Changes"}
+                <button onClick={function(){setShowChange(function(p){return !p;});}} style={Object.assign({},bO,{padding:"6px 14px",fontSize:12})}>
+                  {showChange ? "▲ Hide" : "✏️ Request Changes"}
                 </button>
               </div>
-              {showChange&&(
+              {showChange && (
                 <div style={{animation:"pfup .2s ease"}}>
-                  <textarea
-                    value={changeReq}
-                    onChange={e=>setChangeReq(e.target.value)}
-                    placeholder={"Tell AI what to change, for example:\n• Make the hook more punchy\n• Make it shorter — under 150 words\n• Add more humor / make it lighter in tone\n• Focus more on personal story, less on advice\n• Change the CTA to ask people to comment\n• Make it sound less salesy"}
-                    style={{...ta,minHeight:90,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}
-                  />
+                  <textarea value={changeReq} onChange={function(e){setChangeReq(e.target.value);}}
+                    placeholder={"Examples:\n• Make the hook more punchy and attention-grabbing\n• Shorten to under 150 words\n• Add more personal story, less advice\n• Make the tone more conversational / add humor\n• Change the CTA to ask people to comment"}
+                    style={Object.assign({},ta,{minHeight:90,background:"#FAFCFF",border:"1.5px solid #BFDBFE"})}/>
                   <div style={{display:"flex",gap:9,marginTop:10,flexWrap:"wrap"}}>
-                    <button
-                      style={{...bA,opacity:(!changeReq.trim()||busy.post)?0.6:1}}
-                      onClick={()=>draftPost(true)}
-                      disabled={!changeReq.trim()||busy.post}
-                    >
-                      {busy.post?<><Spin/>Rewriting...</>:"✨ Apply Changes with AI"}
+                    <button style={Object.assign({},bA,{opacity:(!changeReq.trim()||busy.post)?0.6:1})}
+                      onClick={function(){draftPost(true);}} disabled={!changeReq.trim()||busy.post}>
+                      {busy.post ? <React.Fragment><Spin/>Rewriting...</React.Fragment> : "✨ Apply Changes with AI"}
                     </button>
-                    <button style={{...bO,padding:"10px 16px"}} onClick={()=>{setShowChange(false);setChangeReq("");}}>Cancel</button>
+                    <button style={Object.assign({},bO,{padding:"10px 16px"})} onClick={function(){setShowChange(false);setChangeReq("");}}>Cancel</button>
                   </div>
                 </div>
               )}
@@ -756,127 +616,128 @@ Return ONLY the prompt in 1-2 sentences, nothing else.`,
         )}
 
         {/* ── PPT ── */}
-        {step>=3&&(
+        {step >= 3 && (
           <div style={card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:12}}>
               <div>
                 <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>📊 Advanced Carousel PPT</h2>
-                <p style={{margin:0,fontSize:13,color:"#64748B"}}>Pro-grade 6-slide .pptx with stats, tips, gradients · Upload directly to LinkedIn</p>
+                <p style={{margin:0,fontSize:13,color:"#64748B"}}>Pro-grade 6-slide .pptx · stats, tips, gradients · upload to LinkedIn</p>
               </div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                 {!pptBlob
-                  ?<button style={{...bO,opacity:busy.ppt?0.6:1}} onClick={genPPT} disabled={busy.ppt}>{busy.ppt?<><Spin color="#0A66C2"/>Building...</>:"⚡ Generate Advanced PPT"}</button>
-                  :<><button style={{...bO,opacity:busy.ppt?0.6:1}} onClick={genPPT} disabled={busy.ppt}>↺ Regenerate</button><button style={bG} onClick={dlPPT}>⬇ Download .pptx</button></>
+                  ? <button style={Object.assign({},bO,{opacity:busy.ppt?0.6:1})} onClick={genPPT} disabled={busy.ppt}>
+                      {busy.ppt ? <React.Fragment><Spin color="#0A66C2"/>Building...</React.Fragment> : "⚡ Generate PPT"}
+                    </button>
+                  : <React.Fragment>
+                      <button style={Object.assign({},bO,{opacity:busy.ppt?0.6:1})} onClick={genPPT} disabled={busy.ppt}>↺ Redo</button>
+                      <button style={bG} onClick={dlPPT}>⬇ Download .pptx</button>
+                    </React.Fragment>
                 }
               </div>
             </div>
-            {msgs.ppt&&<Notice type={msgs.ppt.startsWith("✅")?"success":msgs.ppt.startsWith("❌")?"error":"warn"}>{msgs.ppt}</Notice>}
-            {pptSlides&&(
-              <div style={{marginTop:14}}>
-                <div style={{fontSize:12,color:"#64748B",marginBottom:9}}>Preview of your {pptSlides.length} slides:</div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:9}}>
-                  {pptSlides.map((s,i)=>{
-                    const isT=i===0,isL=i===pptSlides.length-1;
-                    return (
-                      <div key={i} style={{border:"1px solid #E2E8F0",borderRadius:10,overflow:"hidden",background:isT||isL?"#0A1628":"#fff"}}>
-                        <div style={{background:isT||isL?"#0A66C2":"linear-gradient(90deg,#0A66C2,#38BDF8)",height:4}}/>
-                        <div style={{padding:"9px 11px"}}>
-                          <div style={{fontSize:9,color:isT||isL?"#38BDF8":"#0A66C2",fontWeight:800,marginBottom:3,textTransform:"uppercase",letterSpacing:.4}}>{isT?"📌 Cover":isL?"🎯 CTA":`💡 Slide ${i}`}</div>
-                          <div style={{fontWeight:700,fontSize:11,color:isT||isL?"#F0F4FF":"#0F172A",lineHeight:1.3,marginBottom:3}}>{s.heading}</div>
-                          <div style={{fontSize:10,color:"#94A3B8",lineHeight:1.35}}>{(s.body||"").slice(0,55)}{(s.body||"").length>55?"…":""}</div>
-                          {s.stat&&<div style={{marginTop:5,fontSize:14,fontWeight:900,color:"#0A66C2"}}>{s.stat}</div>}
-                          {s.tip&&<div style={{marginTop:4,fontSize:9,color:"#7C3AED"}}>💡 Has Pro Tip</div>}
-                        </div>
+            {msgs.ppt && <Notice type={msgs.ppt.startsWith("✅")?"success":msgs.ppt.startsWith("❌")?"error":"warn"}>{msgs.ppt}</Notice>}
+            {pptSlides && (
+              <div style={{marginTop:14,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:9}}>
+                {pptSlides.map(function(s,i){
+                  var isT=i===0, isL=i===pptSlides.length-1;
+                  return (
+                    <div key={i} style={{border:"1px solid #E2E8F0",borderRadius:10,overflow:"hidden",background:isT||isL?"#0A1628":"#fff"}}>
+                      <div style={{background:isT||isL?"#0A66C2":"#0A66C2",height:4}}/>
+                      <div style={{padding:"9px 11px"}}>
+                        <div style={{fontSize:9,color:isT||isL?"#38BDF8":"#0A66C2",fontWeight:800,marginBottom:3,textTransform:"uppercase"}}>{isT?"📌 Cover":isL?"🎯 CTA":"💡 Slide "+i}</div>
+                        <div style={{fontWeight:700,fontSize:11,color:isT||isL?"#F0F4FF":"#0F172A",lineHeight:1.3,marginBottom:3}}>{s.heading}</div>
+                        <div style={{fontSize:10,color:"#94A3B8",lineHeight:1.35}}>{(s.body||"").slice(0,55)}{(s.body||"").length>55?"…":""}</div>
+                        {s.stat && <div style={{marginTop:4,fontSize:13,fontWeight:900,color:"#0A66C2"}}>{s.stat}</div>}
+                        {s.tip && <div style={{marginTop:3,fontSize:9,color:"#7C3AED"}}>💡 Pro Tip</div>}
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         )}
 
-                {/* ── AI IMAGE GENERATION ── */}
-        {step>=3&&(
+        {/* ── AI IMAGE GENERATION ── */}
+        {step >= 3 && (
           <div style={card}>
-            <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🎨 AI Image Generation</h2>
+            <h2 style={{margin:"0 0 4px",fontSize:18,color:"#0F172A"}}>🎨 AI Cover Image</h2>
             <p style={{margin:"0 0 14px",fontSize:13,color:"#64748B"}}>
-              Generate a professional cover image for your LinkedIn post — completely free.<br/>
-              <span style={{color:"#94A3B8",fontSize:12}}>Gemini uses your existing API key · Pollinations needs no key at all</span>
+              Generate a professional AI image for your post — completely free.<br/>
+              <span style={{color:"#94A3B8",fontSize:12}}>Gemini uses your existing key · Pollinations needs no key at all</span>
             </p>
 
             {/* Mode toggle */}
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
               {[
-                {id:"gemini",       label:"🤖 Gemini AI",         sub:"Uses your Gemini key · Auto-fallback to Pollinations if unavailable"},
-                {id:"pollinations", label:"🌸 Pollinations (FLUX)", sub:"100% free · No key · No login · Instant"},
-              ].map(m=>(
-                <div key={m.id} onClick={()=>setImgMode(m.id)}
-                  style={{flex:1,minWidth:180,padding:"12px 16px",border:`2px solid ${imgMode===m.id?"#0A66C2":"#E2E8F0"}`,borderRadius:14,cursor:"pointer",background:imgMode===m.id?"#EFF6FF":"#FAFCFF",transition:"all .2s"}}>
-                  <div style={{fontWeight:700,fontSize:14,color:imgMode===m.id?"#0A66C2":"#0F172A"}}>{m.label}</div>
-                  <div style={{fontSize:11,color:"#64748B",marginTop:3}}>{m.sub}</div>
-                </div>
-              ))}
+                {id:"gemini",       label:"🤖 Gemini AI",          sub:"Uses your Gemini key · Falls back to Pollinations if unavailable"},
+                {id:"pollinations", label:"🌸 Pollinations FLUX",   sub:"100% free · No key · No login · Always works"},
+              ].map(function(m){
+                return (
+                  <div key={m.id} onClick={function(){setImgMode(m.id);}}
+                    style={{flex:1,minWidth:170,padding:"12px 16px",border:"2px solid "+(imgMode===m.id?"#0A66C2":"#E2E8F0"),borderRadius:14,cursor:"pointer",background:imgMode===m.id?"#EFF6FF":"#FAFCFF",transition:"all .2s"}}>
+                    <div style={{fontWeight:700,fontSize:14,color:imgMode===m.id?"#0A66C2":"#0F172A"}}>{m.label}</div>
+                    <div style={{fontSize:11,color:"#64748B",marginTop:3}}>{m.sub}</div>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Prompt */}
             <div style={{marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <label style={{fontSize:11,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5}}>Image Prompt</label>
-                <button style={{...bO,fontSize:11,padding:"5px 12px"}} onClick={autoPrompt} disabled={busy.imgPrompt}>
-                  {busy.imgPrompt?<><Spin color="#0A66C2"/>Generating...</>:"✨ Auto-write from topic"}
+                <button style={Object.assign({},bO,{fontSize:11,padding:"5px 12px",opacity:busy.imgPrompt?0.6:1})} onClick={autoPrompt} disabled={busy.imgPrompt}>
+                  {busy.imgPrompt ? <React.Fragment><Spin color="#0A66C2"/>Writing...</React.Fragment> : "✨ Auto-write from topic"}
                 </button>
               </div>
-              <textarea
-                value={imgPrompt}
-                onChange={e=>setImgPrompt(e.target.value)}
-                placeholder={"Describe the image...
-
-Example: 'Professional LinkedIn cover for AI leadership post. Dark navy background, abstract neural network visualization, blue accent lighting, minimal text-free design, cinematic quality'"}
-                style={{...ta,minHeight:90,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}
-              />
+              <textarea value={imgPrompt} onChange={function(e){setImgPrompt(e.target.value);}}
+                placeholder={"Describe the image you want...\n\nExample: 'Professional LinkedIn cover for AI leadership topic. Dark navy background, abstract neural network, blue accent lighting, modern minimal, no text in image'"}
+                style={Object.assign({},ta,{minHeight:90,background:"#FAFCFF",border:"1.5px solid #BFDBFE"})}/>
             </div>
 
-            <button
-              style={{...bV,opacity:!imgPrompt.trim()||busy.img?0.6:1,fontSize:14,padding:"12px 26px"}}
-              onClick={generateImg}
-              disabled={!imgPrompt.trim()||busy.img}
-            >
-              {busy.img?<><Spin/>Generating image...</>:"🎨 Generate Cover Image"}
+            <button style={Object.assign({},bV,{fontSize:14,padding:"12px 26px",opacity:!imgPrompt.trim()||busy.img?0.6:1})}
+              onClick={generateImg} disabled={!imgPrompt.trim()||busy.img}>
+              {busy.img ? <React.Fragment><Spin/>Generating image...</React.Fragment> : "🎨 Generate Cover Image"}
             </button>
 
-            {msgs.img&&<Notice type={msgs.img.startsWith("✅")?"success":msgs.img.startsWith("❌")?"error":"warn"}>{msgs.img}</Notice>}
+            {msgs.img && <Notice type={msgs.img.startsWith("✅")?"success":msgs.img.startsWith("❌")?"error":"warn"}>{msgs.img}</Notice>}
 
-            {genImgSrc&&(
+            {genImgSrc && (
               <div style={{marginTop:16,animation:"pfup .3s ease"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
                   <span style={{fontSize:12,color:"#64748B"}}>✅ Generated with <strong style={{color:"#0A66C2"}}>{imgUsed}</strong></span>
                   <div style={{display:"flex",gap:8}}>
-                    <button style={{...bO,fontSize:12,padding:"6px 14px"}} onClick={generateImg} disabled={busy.img}>🔄 Regenerate</button>
-                    <button style={{...bG,fontSize:12,padding:"6px 14px"}} onClick={downloadImg}>⬇ Download</button>
+                    <button style={Object.assign({},bO,{fontSize:12,padding:"6px 14px",opacity:busy.img?0.6:1})} onClick={generateImg} disabled={busy.img}>🔄 Regenerate</button>
+                    <button style={Object.assign({},bG,{fontSize:12,padding:"6px 14px"})} onClick={downloadImg}>⬇ Download</button>
                   </div>
                 </div>
                 <img src={genImgSrc} alt="AI generated cover"
                   style={{width:"100%",borderRadius:14,border:"1px solid #E2E8F0",boxShadow:"0 4px 20px rgba(0,0,0,.08)",display:"block"}}/>
-                <div style={{marginTop:8,fontSize:11,color:"#94A3B8"}}>
-                  💡 Download this image and attach it to your LinkedIn post for higher engagement
-                </div>
+                <div style={{marginTop:8,fontSize:11,color:"#94A3B8"}}>💡 Download and attach to your LinkedIn post for higher engagement</div>
               </div>
             )}
           </div>
         )}
-}
-        {step>=3&&<div style={{textAlign:"center",marginTop:4,marginBottom:20}}><button style={bO} onClick={reset}>🔄 Start a New Post</button></div>}
+
+        {step >= 3 && (
+          <div style={{textAlign:"center",marginTop:4,marginBottom:20}}>
+            <button style={bO} onClick={reset}>🔄 Start a New Post</button>
+          </div>
+        )}
+
       </div>
     </div>
   );
 }
 
+/* ─── Root ─── */
 function App() {
-  const [view, setView] = useState("landing");
-  return view==="landing" ? <Landing onLaunch={()=>setView("tool")}/> : <Tool onHome={()=>setView("landing")}/>;
+  var [view, setView] = useState("landing");
+  if (view === "landing") return React.createElement(Landing, { onLaunch: function(){ setView("tool"); } });
+  return React.createElement(Tool, { onHome: function(){ setView("landing"); } });
 }
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
 </script>
 </body>
 </html>
