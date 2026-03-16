@@ -9,6 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.2/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.0/dist/pptxgen.bundle.js"></script>
+<script src="https://js.puter.com/v2/"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',sans-serif;background:#F8FAFC;color:#0F172A}
@@ -43,51 +44,62 @@ const SCHED_DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday"];
 const SCHED_TIMES=["7:30 AM","8:00 AM","9:00 AM","10:00 AM","12:00 PM","1:00 PM","3:00 PM","5:00 PM","7:00 PM","8:30 PM"];
 
 /* ══════════ AI ENGINE ══════════ */
-async function aiText(prompt,key){
-  if(!key) throw new Error("Save your Gemini key first");
-  const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="+key,
-    {method:"POST",headers:{"Content-Type":"application/json"},
-     body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.9,topP:0.95}})});
-  const d=await r.json();
-  if(d.error) throw new Error(d.error.message);
-  return d.candidates?.[0]?.content?.parts?.[0]?.text||"";
-}
+/* ── API CONFIG ──
+   YOUR Railway server URL — change this after deploying tonight
+   Users with no Gemini key will use your free proxy (rate limited)
+   Users who add their own key bypass the proxy completely           */
+const PROXY_URL = "https://YOUR-RAILWAY-URL.railway.app"; /* ← update after deploy */
 
-/* FIX: Gemini image uses correct model + correct response parsing */
-async function geminiImg(prompt,key){
-  const r=await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key="+key,
-    {method:"POST",headers:{"Content-Type":"application/json"},
-     body:JSON.stringify({
-       contents:[{parts:[{text:"Generate a photorealistic image: "+prompt}]}],
-       generationConfig:{responseModalities:["TEXT","IMAGE"],temperature:0.4}
-     })});
-  const d=await r.json();
-  if(d.error) throw new Error("Gemini image: "+d.error.message);
-  const parts=d.candidates?.[0]?.content?.parts||[];
-  const img=parts.find(p=>p.inlineData?.mimeType?.startsWith("image/"));
-  if(!img) throw new Error("Gemini returned no image (model may need enabling in your project)");
-  return "data:"+img.inlineData.mimeType+";base64,"+img.inlineData.data;
-}
-
-/* Pollinations: direct fetch with timeout, no Image() ping */
-async function pollinationsImg(prompt){
-  const seed=Math.floor(Math.random()*99999);
-  const url="https://image.pollinations.ai/prompt/"+
-    encodeURIComponent(prompt+", ultra HD 4K, cinematic, professional, no text, no watermark, 16:9 aspect ratio")+
-    "?width=1200&height=675&model=flux&nologo=true&enhance=true&seed="+seed;
-  /* Return URL directly — browser renders it */
-  return url;
-}
-
-async function generateImage(prompt,key,mode){
-  if(mode==="gemini"&&key){
-    try{ return {src:await geminiImg(prompt,key),service:"Gemini AI (base64)"}; }
-    catch(e){ return {src:null,err:e.message}; }
+async function aiText(prompt, key) {
+  /* If user has their own key — call Gemini directly, no proxy needed */
+  if (key && key.trim().length > 10) {
+    const r = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + key,
+      { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.9,topP:0.95} }) }
+    );
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message);
+    return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
   }
-  /* Pollinations — always works, AI-generated */
-  const src=await pollinationsImg(prompt);
-  return {src,service:"Pollinations FLUX (AI)"};
+
+  /* No key — use your free proxy */
+  if (!PROXY_URL || PROXY_URL.includes("YOUR-RAILWAY")) {
+    throw new Error("Free tier not set up yet. Please add your Gemini key above (free at aistudio.google.com/app/apikey)");
+  }
+  const r = await fetch(PROXY_URL + "/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt })
+  });
+  const d = await r.json();
+  if (!r.ok) {
+    if (r.status === 429) throw new Error("⏳ " + d.error + (d.upgrade ? "\n\n💡 " + d.upgrade : ""));
+    throw new Error(d.error || "Server error");
+  }
+  return d.text || "";
+}
+
+/* ══ PUTER.JS IMAGE GENERATION — Free, no API key, multiple AI models ══
+   Uses "user-pays" model: no cost to you, uses visitor's Puter account quota
+   Models available: flux, dall-e-3, gpt-image-1, stable-diffusion-xl, grok-2-image
+   Puter.js loaded via CDN in <head> below
+*/
+const PUTER_MODELS = [
+  {id:"flux",    label:"⚡ FLUX 1.1 Pro",   model:"black-forest-labs/FLUX.1.1-pro", desc:"Best quality, photorealistic"},
+  {id:"sdxl",    label:"🎨 Stable Diffusion XL", model:"stabilityai/stable-diffusion-xl-base-1.0", desc:"Fast, artistic"},
+  {id:"dalle3",  label:"🤖 DALL-E 3",       model:"dall-e-3",                       desc:"OpenAI, high quality"},
+  {id:"gptimg",  label:"✨ GPT Image 1",    model:"gpt-image-1",                    desc:"Latest OpenAI"},
+];
+
+async function generateImage(prompt, modelId){
+  /* puter.js must be loaded — it's added as CDN script in head */
+  if(typeof puter === "undefined") throw new Error("Puter.js not loaded. Try refreshing the page.");
+  const modelEntry = PUTER_MODELS.find(m=>m.id===modelId) || PUTER_MODELS[0];
+  /* puter.ai.txt2img returns a DOM img element — we extract its src */
+  const imgEl = await puter.ai.txt2img(prompt, {model: modelEntry.model});
+  if(!imgEl || !imgEl.src) throw new Error("No image returned. Try a different model.");
+  return {src: imgEl.src, service: modelEntry.label};
 }
 
 function parseJSON(raw){
@@ -426,8 +438,8 @@ function Tool({onHome}){
   const [imgPrompt,setImgPrompt]=useState("");
   const [imgSrc,setImgSrc]=useState(null);
   const [imgSvc,setImgSvc]=useState("");
-  const [imgMode,setImgMode]=useState("pollinations");
-  const [imgErr,setImgErr]=useState("");
+  const [imgMode,setImgMode]=useState("flux");
+  
   const [schedule,setSchedule]=useState(null);
   const [schedDay,setSchedDay]=useState("Tuesday");
   const [schedTime,setSchedTime]=useState("8:00 AM");
@@ -444,7 +456,7 @@ function Tool({onHome}){
 
   function saveKey(){
     if(!key.trim()||key.trim().length<10){sm("key","⚠️ Enter a valid key (starts with AIza...)");return;}
-    localStorage.setItem("pf_gk",key.trim());setKeySaved(true);sm("key","✅ Saved!");
+    localStorage.setItem("pf_gk",key.trim());setKeySaved(true);sm("key","✅ Your key saved — unlimited use enabled!");
   }
 
   async function getTopics(){
@@ -522,18 +534,16 @@ function Tool({onHome}){
 
   async function genImg(){
     if(!imgPrompt.trim())return;
-    setImgSrc(null);setImgSvc("");setImgErr("");
+    setImgSrc(null);setImgSvc("");
     sb("img",true);
-    sm("img",imgMode==="gemini"?"🤖 Gemini AI generating... (~15s)":"🌸 Pollinations FLUX generating... (~20-30s, fully AI)");
+    const modelLabel=(PUTER_MODELS.find(m=>m.id===imgMode)||PUTER_MODELS[0]).label;
+    sm("img","🎨 Generating with "+modelLabel+"... (~15-30s)");
     try{
-      const {src,service,err}=await generateImage(imgPrompt.trim(),imgMode==="gemini"?key:null,imgMode);
-      if(err&&!src){
-        setImgErr(err);
-        sm("img","⚠️ Gemini image failed: "+err+"\n\nSwitch to Pollinations FLUX (free, always works).");
-      } else {
-        setImgSrc(src);setImgSvc(service||"AI");sm("img","✅ AI image ready!");
-      }
-    }catch(e){sm("img","❌ "+e.message);}
+      const {src,service}=await generateImage(imgPrompt.trim(),imgMode);
+      setImgSrc(src);setImgSvc(service);sm("img","✅ AI image ready!");
+    }catch(e){
+      sm("img","❌ "+e.message+"\n\nTip: Make sure you allow Puter.js popup if it appears. Try refreshing if it fails.");
+    }
     sb("img",false);
   }
 
@@ -578,7 +588,7 @@ function Tool({onHome}){
   }
 
   function copyPost(){navigator.clipboard.writeText(post+(htags?"\n\n"+htags:""));setCopied(true);setTimeout(()=>setCopied(false),2200);}
-  function reset(){setStep(1);setDomain("");setCustom("");setIdea("");setTopics([]);setPicked(null);setPost("");setHtags("");setPptSlides(null);setPptBlob(null);setImgSrc(null);setImgPrompt("");setImgSvc("");setImgErr("");setMsgs({});setShowChange(false);setChange("");setSchedule(null);setCarouselText("");setReminderSet(false);setTab("post");}
+  function reset(){setStep(1);setDomain("");setCustom("");setIdea("");setTopics([]);setPicked(null);setPost("");setHtags("");setPptSlides(null);setPptBlob(null);setImgSrc(null);setImgPrompt("");setImgSvc("");setMsgs({});setShowChange(false);setChange("");setSchedule(null);setCarouselText("");setReminderSet(false);setTab("post");}
 
   /* styles */
   const cd={background:"#fff",borderRadius:20,padding:"22px 26px",boxShadow:"0 2px 16px rgba(0,0,0,.06)",marginBottom:16};
@@ -632,22 +642,38 @@ function Tool({onHome}){
 
     <div style={{maxWidth:720,margin:"20px auto 0",padding:"0 16px"}}>
 
-      {/* API KEY */}
+      {/* API KEY — optional now */}
       <div style={cd}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
           <div>
-            <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🔑 Gemini API Key</h2>
-            <p style={{margin:0,color:"#64748B",fontSize:13}}>Stored in your browser only. Free at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style={{color:"#2563EB"}}>aistudio.google.com/app/apikey</a></p>
+            <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🔑 API Key <span style={{fontSize:12,fontWeight:500,color:"#10B981"}}>(Optional)</span></h2>
+            <p style={{margin:0,color:"#64748B",fontSize:13}}>Start free without a key. Add your own for unlimited use.</p>
           </div>
-          {keySaved&&<Badge ch="✓ Connected" col="#10B981"/>}
+          {keySaved ? <Badge ch="✓ Your Key Active" col="#10B981"/> : <Badge ch="✓ Free Tier Active" col="#2563EB"/>}
         </div>
-        <div style={{marginTop:14,display:"flex",gap:9,flexWrap:"wrap"}}>
-          <div style={{flex:1,minWidth:200,position:"relative"}}>
-            <input className="if" type={showKey?"text":"password"} placeholder="AIza..." value={key} onChange={e=>{setKey(e.target.value);setKeySaved(false);sm("key","");}} style={inp}/>
-            <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15}}>{showKey?"🙈":"👁️"}</button>
+
+        {/* Free tier status */}
+        <div style={{marginTop:12,padding:"10px 14px",background:"#F0FDF4",borderRadius:12,border:"1px solid #BBF7D0",fontSize:13}}>
+          <div style={{fontWeight:600,color:"#15803D",marginBottom:3}}>✅ Free tier is ON — just start creating</div>
+          <div style={{color:"#64748B",fontSize:12}}>20 requests/hour · 50 requests/day · No key needed</div>
+        </div>
+
+        {/* Optional key input */}
+        <div style={{marginTop:12}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#64748B",marginBottom:8}}>
+            Want unlimited? Add your free Gemini key:
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style={{color:"#2563EB",marginLeft:6}}>Get free key →</a>
           </div>
-          <button style={{...bP,opacity:!key.trim()?0.5:1}} onClick={saveKey}>Save & Continue →</button>
+          <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
+            <div style={{flex:1,minWidth:200,position:"relative"}}>
+              <input className="if" type={showKey?"text":"password"} placeholder="AIza... (optional)" value={key}
+                onChange={e=>{setKey(e.target.value);setKeySaved(false);sm("key","");}} style={inp}/>
+              <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15}}>{showKey?"🙈":"👁️"}</button>
+            </div>
+            <button style={{...bO,opacity:!key.trim()?0.5:1}} onClick={saveKey}>Save Key</button>
+          </div>
         </div>
+
         {msgs.key&&<Msg type={msgs.key.startsWith("✅")?"success":"warn"} ch={msgs.key}/>}
       </div>
 
@@ -862,48 +888,52 @@ function Tool({onHome}){
         {/* IMAGE TAB */}
         {tab==="image"&&<div style={cd}>
           <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🎨 AI Cover Image</h2>
-          <p style={{margin:"0 0 16px",fontSize:13,color:"#64748B"}}>100% AI generated. No stock photos ever.</p>
+          <p style={{margin:"0 0 16px",fontSize:13,color:"#64748B"}}>100% AI generated via Puter.js — free, no API key needed, multiple models.</p>
 
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-            {[
-              {id:"pollinations",label:"🌸 Pollinations FLUX",sub:"Free · No key · Always works · AI"},
-              {id:"gemini",label:"🤖 Gemini AI",sub:"Your key · High quality (needs model access)"},
-            ].map(m=><div key={m.id} onClick={()=>{setImgMode(m.id);setImgErr("");}} style={{padding:"12px 15px",border:"2px solid "+(imgMode===m.id?"#2563EB":"#E2E8F0"),borderRadius:14,cursor:"pointer",background:imgMode===m.id?"#EFF6FF":"#FAFCFF",transition:"all .2s"}}>
-              <div style={{fontWeight:600,fontSize:13,color:imgMode===m.id?"#2563EB":"#0F172A"}}>{m.label}</div>
-              <div style={{fontSize:11,color:"#64748B",marginTop:3}}>{m.sub}</div>
-            </div>)}
+          {/* Puter.js info banner */}
+          <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:12,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#1D4ED8"}}>
+            ✅ <strong>100% Free via Puter.js</strong> — No API key needed. Uses GPT Image, FLUX, DALL-E 3, Stable Diffusion. First time you generate, Puter may ask you to sign up (free, takes 10 seconds).
           </div>
 
-          {imgMode==="gemini"&&<div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:12,padding:"10px 14px",marginBottom:12,fontSize:12,color:"#92400E"}}>
-            ⚠️ <strong>Gemini Image Note:</strong> Requires <code>gemini-2.0-flash-exp</code> image generation to be enabled in your Google AI Studio project. If it fails, switch to Pollinations FLUX which always works for free.
-          </div>}
+          {/* Model picker */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#64748B",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>🤖 Choose AI Model:</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              {PUTER_MODELS.map(m=><div key={m.id} onClick={()=>setImgMode(m.id)}
+                style={{padding:"10px 14px",border:"2px solid "+(imgMode===m.id?"#2563EB":"#E2E8F0"),borderRadius:13,cursor:"pointer",background:imgMode===m.id?"#EFF6FF":"#FAFCFF",transition:"all .2s"}}>
+                <div style={{fontWeight:600,fontSize:13,color:imgMode===m.id?"#2563EB":"#0F172A"}}>{m.label}</div>
+                <div style={{fontSize:11,color:"#64748B",marginTop:2}}>{m.desc}</div>
+              </div>)}
+            </div>
+          </div>
 
           <div style={{marginBottom:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
               <label style={{fontSize:11,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5}}>Image Prompt</label>
               <button style={{...bO,fontSize:11,padding:"5px 12px",opacity:busy.imgP?0.5:1}} onClick={autoImgPrompt} disabled={busy.imgP}>{busy.imgP?<><Spin c="#2563EB"/>Writing...</>:"✨ AI Auto-Write"}</button>
             </div>
-            <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} className="if" placeholder="e.g. 'Dark navy background, glowing neural network nodes, electric blue light, cinematic depth, no text, ultra HD'" style={{...ta,minHeight:80,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}/>
-            <p style={{margin:"6px 0 0",fontSize:11,color:"#94A3B8"}}>💡 More specific = better image. Include lighting, mood, colors, composition</p>
+            <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} className="if"
+              placeholder="e.g. 'Dark navy background, glowing neural network nodes, electric blue light rays, cinematic depth of field, no text, ultra HD 4K'"
+              style={{...ta,minHeight:80,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}/>
+            <p style={{margin:"6px 0 0",fontSize:11,color:"#94A3B8"}}>💡 More specific = better. Include: lighting style, mood, colors, no text/watermark</p>
           </div>
 
           <button style={{...bV,fontSize:14,padding:"12px 28px",opacity:!imgPrompt.trim()||busy.img?0.5:1}} onClick={genImg} disabled={!imgPrompt.trim()||busy.img}>
-            {busy.img?<><Spin/>Generating...</>:"🎨 Generate AI Image"}
+            {busy.img?<><Spin/>Generating with AI...</>:"🎨 Generate AI Image (Free)"}
           </button>
 
           {msgs.img&&<Msg type={msgs.img.startsWith("✅")?"success":msgs.img.startsWith("❌")?"error":"warn"} ch={msgs.img}/>}
 
           {imgSrc&&<div style={{marginTop:18,animation:"up .3s ease"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-              <span style={{fontSize:12,color:"#64748B"}}>By: <strong style={{color:"#2563EB"}}>{imgSvc}</strong></span>
+              <span style={{fontSize:12,color:"#64748B"}}>Generated by: <strong style={{color:"#2563EB"}}>{imgSvc}</strong></span>
               <div style={{display:"flex",gap:8}}>
                 <button style={{...bO,fontSize:12,padding:"6px 14px",opacity:busy.img?0.5:1}} onClick={genImg} disabled={busy.img}>🔄 Regenerate</button>
-                <button style={{...bG,fontSize:12,padding:"6px 14px"}} onClick={()=>{if(imgSrc.startsWith("data:")){const a=document.createElement("a");a.href=imgSrc;a.download="cover.png";a.click();}else window.open(imgSrc,"_blank");}}>⬇ Save</button>
+                <button style={{...bG,fontSize:12,padding:"6px 14px"}} onClick={()=>{const a=document.createElement("a");a.href=imgSrc;a.download="linkedin-cover.png";a.click();}}>⬇ Save PNG</button>
               </div>
             </div>
-            <img src={imgSrc} alt="AI cover" style={{width:"100%",borderRadius:16,border:"1px solid #E2E8F0",display:"block",boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}
-              onError={()=>{sm("img","⚠️ Image failed to load. Try regenerating.");}}/>
-            <p style={{margin:"10px 0 0",fontSize:11,color:"#94A3B8"}}>💡 Attach to your LinkedIn post for 2-3x more impressions</p>
+            <img src={imgSrc} alt="AI cover" style={{width:"100%",borderRadius:16,border:"1px solid #E2E8F0",display:"block",boxShadow:"0 4px 24px rgba(0,0,0,.1)"}}/>
+            <p style={{margin:"10px 0 0",fontSize:11,color:"#94A3B8"}}>💡 Download and attach to your LinkedIn post — images get 2-3x more reach</p>
           </div>}
         </div>}
 
