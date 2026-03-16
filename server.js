@@ -10,8 +10,8 @@
  */
 
 const express = require("express");
-const fetch   = require("node-fetch");
-const app     = express();
+/* Using built-in fetch — Node 18+ has it natively, no package needed */
+const app = express();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
