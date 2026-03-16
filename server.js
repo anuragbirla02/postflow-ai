@@ -76,12 +76,21 @@ const {
 const userState = {};
 /* Structure: { "+91XXXXXXXXXX": { step: "idle|waiting_tone|waiting_idea", tone: "story", name: "" } } */
 
-async function callGemini(prompt, retries = 3) {
+/* ── SMART MODEL ROUTING ──
+   gemini-1.5-flash      → 1,500 RPD free — best for posts, PPT
+   gemini-2.5-flash-lite → 1,000 RPD free — best for simple tasks
+   gemini-2.5-flash      → only 20 RPD free — avoid on free tier
+*/
+const MODEL_COMPLEX = "gemini-1.5-flash";      /* posts, PPT content */
+const MODEL_SIMPLE  = "gemini-2.5-flash-lite"; /* hashtags, topics, short tasks */
+
+async function callGemini(prompt, simple = false, retries = 3) {
+  const model = simple ? MODEL_SIMPLE : MODEL_COMPLEX;
   for (let attempt = 0; attempt < retries; attempt++) {
     const key = getNextKey();
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -94,7 +103,7 @@ async function callGemini(prompt, retries = 3) {
       const d = await res.json();
       /* If rate limited, try next key */
       if (d.error?.status === "RESOURCE_EXHAUSTED" || d.error?.code === 429) {
-        console.warn(`Key rate limited, trying next key (attempt ${attempt + 1})`);
+        console.warn(`Key ${attempt+1} rate limited on ${model}, trying next...`);
         continue;
       }
       if (d.error) throw new Error(d.error.message);
@@ -104,7 +113,7 @@ async function callGemini(prompt, retries = 3) {
       console.warn(`Attempt ${attempt + 1} failed: ${e.message}`);
     }
   }
-  throw new Error("All API keys exhausted or rate limited. Try again in a minute.");
+  throw new Error("All API keys exhausted. Try again in a minute.");
 }
 
 /* ─── META WHATSAPP SEND MESSAGE ─── */
@@ -327,8 +336,8 @@ async function handleMessage(from, messageBody, buttonId) {
       const hashPrompt = `Give 5 LinkedIn hashtags for: "${rawText}". Return ONLY hashtags separated by spaces.`;
 
       const [post, hashtags] = await Promise.all([
-        callGemini(prompt),
-        callGemini(hashPrompt)
+        callGemini(prompt, false),        /* complex model for post */
+        callGemini(hashPrompt, true)      /* simple model for hashtags */
       ]);
 
       await sendWhatsApp(from,
@@ -370,10 +379,15 @@ async function handleMessage(from, messageBody, buttonId) {
       return;
     }
     if (text === "3" || text.includes("image")) {
-      const styles = { story:"cinematic, golden hour, film grain", insight:"abstract editorial, dramatic lighting", list:"clean minimal, flat lay", mistake:"moody cinematic, lone silhouette" };
+      const styles = {
+        story:   "warm cinematic golden hour light, 35mm film grain, shallow depth of field, one meaningful silhouette",
+        insight: "bold abstract composition, dramatic side lighting, dark background, electric color accent, sharp geometric shapes",
+        list:    "clean minimal flat lay, soft overhead diffused light, editorial magazine style, white background, organized objects",
+        mistake: "lone figure at turning point, moody chiaroscuro lighting, cinematic fog, deep shadows, contemplative atmosphere"
+      };
       const style = styles[state.tone||"story"];
       await sendWhatsApp(from,
-        `🎨 *Image Prompt for your cover:*\n\n_"${state.lastIdea||"professional LinkedIn content"}: ${style}, no text, ultra HD 4K, 16:9"_\n\nPaste this at:\n🌸 image.pollinations.ai\n🤖 Or use the PostFlow AI website\n\nFree AI image, no account needed!`
+        `🎨 *Professional Image Prompt:*\n\n_"${state.lastIdea||"professional LinkedIn content"}: ${style}, deep navy and blue color palette, no text, no words, no watermark, ultra HD 4K, 16:9 landscape, professional photography"_\n\nPaste this at:\n🌸 *image.pollinations.ai* (free, no signup)\n\n💡 Tip: More detail = better image. You can edit the prompt before generating.`
       );
       return;
     }
@@ -566,13 +580,13 @@ app.post("/api/ai", async (req, res) => {
     });
   }
 
-  const { prompt } = req.body;
+  const { prompt, simple } = req.body;
   if (!prompt || typeof prompt !== "string" || prompt.length > 8000) {
     return res.status(400).json({ error: "Invalid prompt" });
   }
 
   try {
-    const text = await callGemini(prompt);
+    const text = await callGemini(prompt, simple === true);
     res.json({ text });
   } catch (err) {
     console.error("AI proxy error:", err.message);
