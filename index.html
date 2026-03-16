@@ -526,45 +526,44 @@ Write compelling slide content. Return ONLY valid JSON:
       if(!parsed?.slides){ sm("ppt","⚠️ Could not parse slides. Retry."); sb("ppt",false); return; }
       setPptSlides(parsed.slides);
 
-      /* Step 2 — Send to Presenton to design the actual PPT */
-      sm("ppt","🎨 Presenton designing beautiful slides...");
-
-      /* Build the Presenton prompt from our content */
+      /* Build slide descriptions for Presenton prompt */
       const slideDescriptions = parsed.slides.map((s,i) =>
         `Slide ${i+1}: ${s.heading}. ${s.content}${s.stat?" Key stat: "+s.stat:""}${s.quote?" Quote: "+s.quote:""}${s.items?" Points: "+s.items.join(", "):""}`
-      ).join("\n");
+      ).join(" | ");
 
-      const presentonPrompt = `LinkedIn carousel presentation about: ${topic}
+      /* Step 2 — Send to Presenton with correct endpoint + FormData */
+      sm("ppt","🎨 Presenton designing beautiful slides...");
 
-${slideDescriptions}
+      const formData = new FormData();
+      formData.append("prompt", `Professional LinkedIn carousel about: ${topic}. ${slideDescriptions}. Style: modern, clean, professional. Bold typography.`);
+      formData.append("n_slides", String(slideCount));
+      formData.append("theme", "general");
+      formData.append("export_as", "pptx");
 
-Style: Modern, professional, LinkedIn-ready. Bold typography, clean layout, high contrast. Each slide should be visually distinct.`;
-
-      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/generate", {
+      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/generate/presentation", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: presentonPrompt,
-          slide_count: slideCount,
-        })
+        body: formData
       });
 
       if(!presentonRes.ok){
-        /* Presenton failed — fall back to download link */
-        throw new Error("Presenton returned " + presentonRes.status);
+        const errText = await presentonRes.text();
+        throw new Error("Presenton error " + presentonRes.status + ": " + errText.slice(0,100));
       }
 
       const presentonData = await presentonRes.json();
+      console.log("Presenton response:", JSON.stringify(presentonData).slice(0,200));
 
-      /* Presenton returns a file path or download URL */
-      const pptUrl = presentonData.download_url || presentonData.url || presentonData.file;
+      /* Presenton returns presentation_id and path */
+      const pptUrl = presentonData.path ||
+                     presentonData.download_url ||
+                     presentonData.url ||
+                     (presentonData.presentation_id ? PRESENTON_URL + "/api/v1/ppt/export/presentation?presentation_id=" + presentonData.presentation_id + "&export_as=pptx" : null);
 
       if(pptUrl){
-        /* Store the URL for download */
-        setPptBlob(pptUrl);
-        sm("ppt","✅ Beautiful slides ready! Click Download.");
+        setPptBlob(pptUrl.startsWith("http") ? pptUrl : PRESENTON_URL + pptUrl);
+        sm("ppt","✅ Beautiful Presenton slides ready! Click Download.");
       } else {
-        throw new Error("No download URL from Presenton");
+        throw new Error("No download URL in Presenton response: " + JSON.stringify(presentonData).slice(0,100));
       }
 
       /* Build carousel text for copy */
