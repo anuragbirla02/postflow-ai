@@ -194,155 +194,143 @@ async function generateImagePrompt(idea, tone) {
 /* ─── MESSAGE HANDLER ─── */
 async function handleMessage(from, messageBody, buttonId) {
   const text = (messageBody || "").trim().toLowerCase();
+  const rawText = (messageBody || "").trim();
   const state = userState[from] || { step: "new" };
   userState[from] = state;
 
-  console.log(`[MSG] From: ${from} | Step: ${state.step} | Text: ${text.slice(0, 50)}`);
+  console.log(`[MSG] From: ${from} | Step: ${state.step} | Text: "${text.slice(0,60)}"`);
 
-  /* ── NEW USER ── */
-  if (state.step === "new" || text === "hi" || text === "hello" || text === "start") {
+  /* ── NEW USER or restart ── */
+  if (state.step === "new" || text === "hi" || text === "hello" || text === "start" || text === "restart") {
     state.step = "waiting_tone";
     await sendWhatsApp(from,
-      `⚡ *Welcome to PostFlow AI!*\n\nI turn your rough ideas into polished LinkedIn posts.\n\n*How it works:*\n1️⃣ Pick a post format\n2️⃣ Share your rough idea\n3️⃣ Get your polished post + hashtags\n\nLet's start! What format do you want?`
+      `👋 Welcome to *PostFlow AI*!\n\nI turn your rough ideas into polished LinkedIn posts in seconds.\n\n*Reply with a number to pick your format:*\n\n1️⃣ *Story* — Personal journey & lessons\n2️⃣ *Hot Take* — Bold opinion + data\n3️⃣ *List Post* — Actionable tips\n4️⃣ *Mistake* — Failure you learned from\n\nOr just text your idea directly and I'll handle the rest! 💡`
     );
-    await sendButtons(from, "Choose your post format:", [
-      { id: "tone_story",   title: "📖 Story" },
-      { id: "tone_insight", title: "💡 Hot Take" },
-      { id: "tone_list",   title: "📋 List Post" }
-    ]);
     return;
   }
 
   /* ── TONE SELECTION ── */
-  if (state.step === "waiting_tone" || buttonId?.startsWith("tone_")) {
-    const toneMap = {
-      tone_story:   "story",
-      tone_insight: "insight",
-      tone_list:    "list",
-      tone_mistake: "mistake"
-    };
+  if (state.step === "waiting_tone") {
+    let selectedTone = null;
 
-    /* Check button reply */
-    let selectedTone = buttonId ? toneMap[buttonId] : null;
+    /* Number replies */
+    if (text === "1" || text.includes("story"))   selectedTone = "story";
+    if (text === "2" || text.includes("hot") || text.includes("take") || text.includes("insight")) selectedTone = "insight";
+    if (text === "3" || text.includes("list"))    selectedTone = "list";
+    if (text === "4" || text.includes("mistake") || text.includes("fail")) selectedTone = "mistake";
 
-    /* Check text reply */
-    if (!selectedTone) {
-      if (text.includes("story"))   selectedTone = "story";
-      if (text.includes("hot") || text.includes("take") || text.includes("insight")) selectedTone = "insight";
-      if (text.includes("list"))    selectedTone = "list";
-      if (text.includes("mistake") || text.includes("fail")) selectedTone = "mistake";
+    /* If they just sent their idea directly — use story as default */
+    if (!selectedTone && rawText.length > 20) {
+      selectedTone = "story";
+      state.tone = selectedTone;
+      state.step = "waiting_idea";
+      /* Process their message directly as the idea */
+      await handleMessage(from, messageBody, null);
+      return;
     }
 
     if (selectedTone) {
       state.tone = selectedTone;
       state.step = "waiting_idea";
-      const toneNames = { story: "📖 Story", insight: "💡 Hot Take", list: "📋 List Post", mistake: "❌ Mistake" };
+      const toneNames = { story:"📖 Story", insight:"💡 Hot Take", list:"📋 List Post", mistake:"❌ Mistake" };
       await sendWhatsApp(from,
-        `Got it! *${toneNames[selectedTone]}* format selected ✅\n\nNow send me your rough idea.\nCan be:\n• A few bullet points\n• A half-written thought\n• Just one sentence\n\n_Example: "I spent 2 years building a product nobody wanted. Here's what I learned"_`
+        `${toneNames[selectedTone]} selected ✅\n\nNow send me your idea!\n\nExamples:\n• "I grew my LinkedIn to 5k followers in 90 days"\n• "Cold outreach tip that got me 40% reply rate"\n• Bullet points you want expanded\n• A rough draft for AI to polish\n\n_Send anything — I'll turn it into a great post_ 🚀`
       );
     } else {
-      await sendButtons(from, "Please pick one of these formats:", [
-        { id: "tone_story",   title: "📖 Story" },
-        { id: "tone_insight", title: "💡 Hot Take" },
-        { id: "tone_list",   title: "📋 List Post" }
-      ]);
+      await sendWhatsApp(from,
+        `Reply with:\n1️⃣ Story\n2️⃣ Hot Take\n3️⃣ List Post\n4️⃣ Mistake\n\nOr just send your idea directly!`
+      );
     }
     return;
   }
 
-  /* ── IDEA RECEIVED — GENERATE POST ── */
+  /* ── IDEA RECEIVED → GENERATE POST ── */
   if (state.step === "waiting_idea") {
-    /* Short message probably means they're confused */
-    if (text.length < 15) {
-      await sendWhatsApp(from, `Send me your idea! Minimum a sentence or two about what you want to post about. 💡`);
+    if (rawText.length < 10) {
+      await sendWhatsApp(from, `Send me your idea! A sentence or two about what you want to post about 💡`);
       return;
     }
 
     state.step = "generating";
-    await sendWhatsApp(from, `🤖 Got it! Writing your LinkedIn post...\n_This takes ~10 seconds_`);
+    await sendWhatsApp(from, `✍️ Got it! Writing your LinkedIn post...\n_Takes about 10 seconds_`);
 
     try {
       const tone = state.tone || "story";
-      const idea = messageBody.trim();
+      const tonePrompts = {
+        story: "storytelling format with hook, personal insight, 3 lessons, CTA",
+        insight: "controversial opening claim, expand argument, counter + rebuttal, polarizing question",
+        list: "numbered list format with bold concepts and brief explanations",
+        mistake: "failure stated upfront, story, turning point, 3 things learned"
+      };
 
-      /* Generate post and hashtags in parallel */
+      const prompt = `You are a LinkedIn content expert. Write a LinkedIn post about:\n"${rawText}"\n\nFormat: ${tonePrompts[tone]}\n\nRules:\n- 150-220 words\n- First person, conversational\n- No "I'm excited to share", no em-dashes, no corporate jargon\n- Blank lines between sections\n- One idea per line\n\nReturn ONLY the post text.`;
+
+      const hashPrompt = `Give 5 LinkedIn hashtags for: "${rawText}". Return ONLY hashtags separated by spaces.`;
+
       const [post, hashtags] = await Promise.all([
-        generateLinkedInPost(idea, tone),
-        generateHashtags(idea)
+        callGemini(prompt),
+        callGemini(hashPrompt)
       ]);
 
-      /* Send the post */
       await sendWhatsApp(from,
-        `✅ *Your LinkedIn Post is Ready!*\n\n━━━━━━━━━━━━━━━\n\n${post}\n\n━━━━━━━━━━━━━━━\n\n*Hashtags:*\n${hashtags}`
+        `✅ *Your LinkedIn Post:*\n\n━━━━━━━━━━━━━━━\n\n${post}\n\n━━━━━━━━━━━━━━━\n\n*Hashtags:* ${hashtags.trim()}`
       );
 
-      /* Send follow-up options */
-      await new Promise(r => setTimeout(r, 1500)); /* small delay */
-      await sendButtons(from,
-        `What would you like to do?`,
-        [
-          { id: "action_new",    title: "✍️ New Post" },
-          { id: "action_change", title: "🔄 Change Format" },
-          { id: "action_image",  title: "🎨 Image Prompt" }
-        ]
+      await new Promise(r => setTimeout(r, 1000));
+      await sendWhatsApp(from,
+        `*What next?*\n\n1️⃣ New post\n2️⃣ Change this post\n3️⃣ Get image prompt for cover\n\nOr just send a new idea! 💡`
       );
 
-      state.lastIdea = idea;
+      state.lastIdea = rawText;
       state.lastPost = post;
       state.step = "post_done";
 
-    } catch (err) {
+    } catch(err) {
       console.error("Generation error:", err);
-      await sendWhatsApp(from, `❌ Something went wrong: ${err.message}\n\nPlease try again or visit postflowai.com`);
+      await sendWhatsApp(from, `❌ Error: ${err.message}\n\nPlease try again or visit postflow-ai-iota.vercel.app`);
       state.step = "waiting_idea";
     }
     return;
   }
 
-  /* ── POST DONE — HANDLE NEXT ACTION ── */
-  if (state.step === "post_done" || buttonId?.startsWith("action_")) {
-    if (buttonId === "action_new" || text === "new" || text.includes("new post")) {
-      state.step = "waiting_tone";
-      state.tone = null;
-      await sendButtons(from, "Great! Pick a format for your next post:", [
-        { id: "tone_story",   title: "📖 Story" },
-        { id: "tone_insight", title: "💡 Hot Take" },
-        { id: "tone_list",   title: "📋 List Post" }
-      ]);
+  /* ── POST DONE ── */
+  if (state.step === "post_done" || state.step === "generating") {
+    if (state.step === "generating") {
+      await sendWhatsApp(from, `⏳ Still generating... please wait a moment!`);
       return;
     }
 
-    if (buttonId === "action_change" || text.includes("change") || text.includes("different")) {
+    if (text === "1" || text.includes("new")) {
+      state.step = "waiting_tone"; state.tone = null;
+      await handleMessage(from, "hi", null);
+      return;
+    }
+    if (text === "2" || text.includes("change")) {
       state.step = "waiting_idea";
-      await sendWhatsApp(from, `Send me your idea again and I'll rewrite it with a different angle 🔄`);
+      await sendWhatsApp(from, `Send me your idea again and I'll write a different version 🔄`);
       return;
     }
-
-    if (buttonId === "action_image" || text.includes("image") || text.includes("cover")) {
-      const imgPrompt = await generateImagePrompt(state.lastIdea || "professional content", state.tone || "story");
+    if (text === "3" || text.includes("image")) {
+      const styles = { story:"cinematic, golden hour, film grain", insight:"abstract editorial, dramatic lighting", list:"clean minimal, flat lay", mistake:"moody cinematic, lone silhouette" };
+      const style = styles[state.tone||"story"];
       await sendWhatsApp(from,
-        `🎨 *AI Image Prompt for your cover:*\n\n_"${imgPrompt}"_\n\nPaste this at:\n🌸 *https://image.pollinations.ai*\n🤖 Or use Gemini/Midjourney\n\n_This generates a free AI image matching your post_`
+        `🎨 *Image Prompt for your cover:*\n\n_"${state.lastIdea||"professional LinkedIn content"}: ${style}, no text, ultra HD 4K, 16:9"_\n\nPaste this at:\n🌸 image.pollinations.ai\n🤖 Or use the PostFlow AI website\n\nFree AI image, no account needed!`
       );
       return;
     }
-
-    /* If they just sent text after post is done — treat as new idea */
-    if (text.length > 20) {
+    /* Treat as new idea */
+    if (rawText.length > 15) {
       state.step = "waiting_idea";
       await handleMessage(from, messageBody, null);
+      return;
     }
-    return;
-  }
-
-  /* ── GENERATING STATE (prevent double trigger) ── */
-  if (state.step === "generating") {
-    await sendWhatsApp(from, `⏳ Still generating your post... please wait a moment!`);
+    await sendWhatsApp(from, `Send *hi* to start a new post, or just send your idea directly! 💡`);
     return;
   }
 
   /* ── FALLBACK ── */
   state.step = "new";
-  await sendWhatsApp(from, `Send *hi* to start creating LinkedIn posts! ⚡`);
+  await handleMessage(from, "hi", null);
 }
 
 /* ─── META WEBHOOK VERIFICATION ─── */
