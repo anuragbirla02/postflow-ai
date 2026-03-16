@@ -1,1196 +1,621 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>PostFlow AI — LinkedIn Idea to Post + Carousel</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
-<script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.2/babel.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.0/dist/pptxgen.bundle.js"></script>
-<script src="https://js.puter.com/v2/"></script>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#F8FAFC;color:#0F172A}
-@keyframes dot{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
-@keyframes up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
-@keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(37,99,235,.3)}50%{box-shadow:0 0 24px 8px rgba(37,99,235,.12)}}
-@keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
-textarea,input,select{font-family:'Inter',sans-serif}
-</style>
-</head>
-<body>
-<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:'Inter',sans-serif;color:#64748B;font-size:15px;gap:8px">
-<span style="animation:dot 1.2s .0s infinite ease-in-out;width:8px;height:8px;background:#2563EB;border-radius:50%;display:inline-block"></span>
-<span style="animation:dot 1.2s .15s infinite ease-in-out;width:8px;height:8px;background:#2563EB;border-radius:50%;display:inline-block"></span>
-<span style="animation:dot 1.2s .3s infinite ease-in-out;width:8px;height:8px;background:#2563EB;border-radius:50%;display:inline-block"></span>
-</div></div>
+/**
+ * PostFlow AI — WhatsApp Bot Server
+ * Meta Business API + Gemini AI + Railway deployment
+ * 
+ * Flow:
+ *   User texts WhatsApp number
+ *   → This server receives it via Meta webhook
+ *   → Calls Gemini to generate LinkedIn post
+ *   → Sends reply back via Meta API
+ */
 
-<script type="text/babel">
-const {useState,useEffect,useRef} = React;
+const express = require("express");
+/* Using built-in fetch — Node 18+ has it natively, no package needed */
+const app = express();
 
-const DOMAINS=["Tech & AI","Data Science","Web Development","Product Management","Business Strategy","Marketing & Growth","Finance & Investing","Leadership","Startups","Career Growth","Cybersecurity","UX & Design","DevOps & Cloud","Blockchain","Healthcare & MedTech"];
-const POST_TONES=[{id:"story",label:"📖 Story",desc:"Personal journey"},{id:"insight",label:"💡 Hot Take",desc:"Contrarian opinion"},{id:"list",label:"📋 List Post",desc:"Actionable tips"},{id:"question",label:"❓ Conversation",desc:"Sparks replies"},{id:"data",label:"📊 Data Drop",desc:"Stats + analysis"},{id:"mistake",label:"❌ Mistake",desc:"Failure + lessons"}];
-const PPT_THEMES=[
-  {id:"midnight",label:"🌙 Midnight",  c:{bg:"060D1A",s1:"0A1628",s2:"FFFFFF",acc:"38BDF8",brd:"2563EB",tx:"F0F4FF",sub:"94A3B8",dk:true}},
-  {id:"aurora",  label:"🔮 Aurora",   c:{bg:"0D0A1E",s1:"130D28",s2:"FFFFFF",acc:"A78BFA",brd:"7C3AED",tx:"F5F3FF",sub:"C4B5FD",dk:true}},
-  {id:"neon",    label:"⚡ Neon",     c:{bg:"020A0D",s1:"071218",s2:"FFFFFF",acc:"22D3EE",brd:"06B6D4",tx:"ECFEFF",sub:"67E8F9",dk:true}},
-  {id:"solar",   label:"☀️ Solar",   c:{bg:"FFFBEB",s1:"FEF9C3",s2:"FFFFFF",acc:"F59E0B",brd:"D97706",tx:"1C1917",sub:"78716C",dk:false}},
-  {id:"forest",  label:"🌿 Forest",  c:{bg:"F0FDF4",s1:"DCFCE7",s2:"FFFFFF",acc:"10B981",brd:"059669",tx:"052E16",sub:"4B7C5F",dk:false}},
-  {id:"crimson", label:"🔥 Crimson", c:{bg:"1C0A0A",s1:"2D1212",s2:"FFFFFF",acc:"F87171",brd:"EF4444",tx:"FFF1F2",sub:"FCA5A5",dk:true}},
-];
-const SCHED_DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday"];
-const SCHED_TIMES=["7:30 AM","8:00 AM","9:00 AM","10:00 AM","12:00 PM","1:00 PM","3:00 PM","5:00 PM","7:00 PM","8:30 PM"];
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-/* ══════════ AI ENGINE ══════════ */
-/* ── API CONFIG ──
-   YOUR Railway server URL — change this after deploying tonight
-   Users with no Gemini key will use your free proxy (rate limited)
-   Users who add their own key bypass the proxy completely           */
-const PROXY_URL = "https://postflow-ai-production.up.railway.app";
-const PRESENTON_URL = "https://presenton-production-77c4.up.railway.app";
-
-async function aiText(prompt, key) {
-  /* If user has their own key — call Gemini directly, no proxy needed */
-  if (key && key.trim().length > 10) {
-    const r = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + key,
-      { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.9,topP:0.95} }) }
-    );
-    const d = await r.json();
-    if (d.error) throw new Error(d.error.message);
-    return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
+/* ─── CORS — allow your frontend on all routes ─── */
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "";
+  const allowed = [
+    process.env.FRONTEND_URL || "https://postflow-ai-iota.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://postflow-ai-iota.vercel.app",
+  ];
+  if (!origin || allowed.some(a => origin.startsWith(a)) || process.env.NODE_ENV !== "production") {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
   }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
 
-  /* No key — use your free proxy */
-  const r = await fetch(PROXY_URL + "/api/ai", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, simple: false })
-  });
-  const d = await r.json();
-  if (!r.ok) {
-    if (r.status === 429) throw new Error("⏳ " + d.error + (d.upgrade ? "\n\n💡 " + d.upgrade : ""));
-    throw new Error(d.error || "Server error");
-  }
-  return d.text || "";
-}
-
-/* ══ PUTER.JS IMAGE GENERATION — Free, no API key, multiple AI models ══
-   Uses "user-pays" model: no cost to you, uses visitor's Puter account quota
-   Models available: flux, dall-e-3, gpt-image-1, stable-diffusion-xl, grok-2-image
-   Puter.js loaded via CDN in <head> below
+/* ─── MULTIPLE GEMINI KEY ROTATION ───
+   Add as many free keys as you want in Railway:
+   GEMINI_KEY_1=AIza...
+   GEMINI_KEY_2=AIza...
+   GEMINI_KEY_3=AIza...
+   etc. They rotate round-robin so no single key gets rate limited.
 */
-const PUTER_MODELS = [
-  {id:"flux",    label:"⚡ FLUX 1.1 Pro",   model:"black-forest-labs/FLUX.1.1-pro", desc:"Best quality, photorealistic"},
-  {id:"sdxl",    label:"🎨 Stable Diffusion XL", model:"stabilityai/stable-diffusion-xl-base-1.0", desc:"Fast, artistic"},
-  {id:"dalle3",  label:"🤖 DALL-E 3",       model:"dall-e-3",                       desc:"OpenAI, high quality"},
-  {id:"gptimg",  label:"✨ GPT Image 1",    model:"gpt-image-1",                    desc:"Latest OpenAI"},
-];
-
-async function generateImage(prompt, modelId){
-  /* puter.js must be loaded — it's added as CDN script in head */
-  if(typeof puter === "undefined") throw new Error("Puter.js not loaded. Try refreshing the page.");
-  const modelEntry = PUTER_MODELS.find(m=>m.id===modelId) || PUTER_MODELS[0];
-  /* puter.ai.txt2img returns a DOM img element — we extract its src */
-  const imgEl = await puter.ai.txt2img(prompt, {model: modelEntry.model});
-  if(!imgEl || !imgEl.src) throw new Error("No image returned. Try a different model.");
-  return {src: imgEl.src, service: modelEntry.label};
-}
-
-function parseJSON(raw){
-  try{return JSON.parse(raw.replace(/```json\n?|```\n?/g,"").trim());}
-  catch{
-    const m=raw.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if(m)try{return JSON.parse(m[0]);}catch{}
-    return null;
+function getGeminiKeys() {
+  const keys = [];
+  /* Primary key */
+  if (process.env.GEMINI_KEY) keys.push(process.env.GEMINI_KEY);
+  /* Additional keys GEMINI_KEY_1 through GEMINI_KEY_20 */
+  for (let i = 1; i <= 20; i++) {
+    const k = process.env[`GEMINI_KEY_${i}`];
+    if (k) keys.push(k);
   }
+  return keys;
 }
 
-/* ══════════ SMART PROMPTS ══════════ */
-const SYS=`You are a LinkedIn content expert. Rules:
-- Pattern-interrupt hooks (bold claims, shocking facts) outperform questions 3x  
-- One idea per line, blank lines between sections
-- 150-220 words optimal. No em-dashes. No "I'm excited to share"
-- Personal vulnerability → comments. Data → shares. Lists → saves`;
+let keyIndex = 0;
+function getNextKey() {
+  const keys = getGeminiKeys();
+  if (keys.length === 0) throw new Error("No Gemini API keys configured");
+  const key = keys[keyIndex % keys.length];
+  keyIndex++;
+  return key;
+}
 
-const TONE_STRUCTS={
-  story:"Hook (bold claim/fact, not a question) → blank → 3-4 story lines → blank → 'Here's what I learned:' → 3 numbered lessons → blank → CTA asking their story",
-  insight:"Controversial claim (≤10 words) → blank → 'Here's what most miss:' → 3-4 argument lines → blank → counter-argument → rebuttal → blank → polarizing yes/no question",
-  list:"'X things [audience] should do instead of [mistake]:' → blank → 5-7 numbered insights (Bold: explanation) → blank → 'Bonus:' → 'Save this.'",
-  question:"Unanswerable question → blank → your answer 4-5 lines → blank → 'Both sides:' 2 perspectives → blank → 'What's your take?'",
-  data:"Shocking stat opener → blank → WHY it matters → blank → 'What data misses:' → 3 analysis lines → practical implication → 'Your experience?'",
-  mistake:"Mistake stated upfront, no buildup → blank → specific story 2-3 lines → blank → 'The moment I realized:' → turning point → blank → 3 things you'd do differently → 'Still figuring it out.'"
+/* ─── ENV VARIABLES (set in Railway dashboard) ─── */
+const {
+  META_VERIFY_TOKEN,   // any string you choose e.g. "postflow2024"
+  META_ACCESS_TOKEN,   // from Meta App Dashboard → WhatsApp → API Setup
+  META_PHONE_NUMBER_ID,// from Meta App Dashboard → WhatsApp → API Setup
+  GEMINI_KEY,          // from aistudio.google.com/app/apikey
+  PORT = 3000
+} = process.env;
+
+/* ─── In-memory user state (tracks conversation step) ─── */
+/* For production, replace with a database like Supabase (free) */
+const userState = {};
+/* Structure: { "+91XXXXXXXXXX": { step: "idle|waiting_tone|waiting_idea", tone: "story", name: "" } } */
+
+/* ── SMART MODEL ROUTING ──
+   gemini-1.5-flash      → 1,500 RPD free — best for posts, PPT
+   gemini-2.5-flash-lite → 1,000 RPD free — best for simple tasks
+   gemini-2.5-flash      → only 20 RPD free — avoid on free tier
+*/
+const MODEL_COMPLEX = "gemini-1.5-flash";      /* posts, PPT content */
+const MODEL_SIMPLE  = "gemini-2.5-flash-lite"; /* hashtags, topics, short tasks */
+
+async function callGemini(prompt, simple = false, retries = 3) {
+  const model = simple ? MODEL_SIMPLE : MODEL_COMPLEX;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const key = getNextKey();
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.85, topP: 0.95 }
+          })
+        }
+      );
+      const d = await res.json();
+      /* If rate limited, try next key */
+      if (d.error?.status === "RESOURCE_EXHAUSTED" || d.error?.code === 429) {
+        console.warn(`Key ${attempt+1} rate limited on ${model}, trying next...`);
+        continue;
+      }
+      if (d.error) throw new Error(d.error.message);
+      return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    } catch(e) {
+      if (attempt === retries - 1) throw e;
+      console.warn(`Attempt ${attempt + 1} failed: ${e.message}`);
+    }
+  }
+  throw new Error("All API keys exhausted. Try again in a minute.");
+}
+
+/* ─── META WHATSAPP SEND MESSAGE ─── */
+async function sendWhatsApp(to, message) {
+  const res = await fetch(
+    `https://graph.facebook.com/v19.0/${META_PHONE_NUMBER_ID}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${META_ACCESS_TOKEN}`
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: to,
+        type: "text",
+        text: { body: message }
+      })
+    }
+  );
+  const d = await res.json();
+  if (d.error) console.error("WhatsApp send error:", d.error);
+  return d;
+}
+
+/* Send interactive list/button message */
+async function sendButtons(to, bodyText, buttons) {
+  /* buttons = [{id:"btn_id", title:"Button Text"}] max 3 */
+  const res = await fetch(
+    `https://graph.facebook.com/v19.0/${META_PHONE_NUMBER_ID}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${META_ACCESS_TOKEN}`
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: bodyText },
+          action: {
+            buttons: buttons.map(b => ({
+              type: "reply",
+              reply: { id: b.id, title: b.title }
+            }))
+          }
+        }
+      })
+    }
+  );
+  const d = await res.json();
+  if (d.error) {
+    /* Fallback to plain text if buttons fail */
+    await sendWhatsApp(to, bodyText + "\n\nReply with: " + buttons.map(b => b.title).join(" | "));
+  }
+  return d;
+}
+
+/* ─── LINKEDIN POST GENERATOR ─── */
+const TONE_PROMPTS = {
+  story: `Write a LinkedIn post using storytelling format:
+- Bold pattern-interrupt hook (NOT a question, max 12 words)
+- blank line
+- 3-4 lines personal story (one idea per line)
+- blank line
+- "Here's what I learned:"
+- 3 numbered lessons (action verb, max 1.5 lines each)
+- blank line
+- CTA asking for their story
+
+Rules: 150-220 words, first person, no "I'm excited to share", no em-dashes, conversational`,
+
+  insight: `Write a LinkedIn post as a hot take / opinion:
+- Controversial opening claim (max 10 words)
+- blank line
+- "Here's what most people miss:"
+- 3-4 lines expanding argument
+- blank line
+- Counter-argument in 1 line, then rebuttal in 2 lines
+- blank line
+- Polarizing yes/no question at end
+
+Rules: 150-220 words, no jargon, no em-dashes`,
+
+  list: `Write a LinkedIn list post:
+- Opening: "X things [audience] should do instead of [common mistake]:"
+- blank line
+- 5-7 numbered insights (Bold concept: explanation, max 1.5 lines each)
+- blank line
+- "Bonus:" one surprising insight
+- blank line
+- "Save this."
+
+Rules: 150-220 words, punchy, actionable`,
+
+  mistake: `Write a LinkedIn post about a failure/mistake:
+- The mistake stated upfront, no buildup (max 12 words)
+- blank line
+- What happened (2-3 specific lines)
+- blank line
+- "The moment I realized:"
+- Turning point (2 lines)
+- blank line
+- 3 things you'd do differently (numbered)
+- blank line
+- "Still figuring it out."
+
+Rules: 150-220 words, vulnerable, specific`
 };
 
-function topicsPrompt(domain,custom,ctx,tone){
-  return SYS+"\n\nGenerate 6 LinkedIn post ideas for "+(custom?`"${custom}"`:domain)+
-    (ctx?"\nCreator context: "+ctx:"")+
-    "\nFocus: "+({story:"personal stories with turns",insight:"hot takes vs consensus",list:"save-worthy frameworks",question:"polarizing debates",data:"surprising stats",mistake:"honest failures"}[tone]||"viral posts")+
-    "\n\nReturn ONLY JSON:\n[{\"title\":\"specific topic\",\"hook\":\"exact first line ≤12 words no question\",\"why\":\"why high engagement\",\"angle\":\"unique insight\",\"emoji\":\"🔥\",\"engagement_type\":\"comment|share|save\",\"reach\":\"low|medium|high|viral\"}]";
-}
-
-function postPrompt(topic,tone,ctx,angle){
-  return SYS+"\n\nWrite LinkedIn post: \""+topic+"\"\nAngle: "+(angle||"authentic")+
-    (ctx?"\nContext: "+ctx:"")+
-    "\n\nStructure: "+TONE_STRUCTS[tone]+
-    "\n\nRules: ≤230 words, first person, no jargon, no em-dashes, conversational\nReturn ONLY the post text.";
-}
-
-/* Dynamic slide count based on content */
-function pptPrompt(topic,post,tone,slideCount){
-  const sc=slideCount||7;
-  const midLayouts=[];
-  const layouts=["stat","tip","quote","list","highlight"];
-  for(let i=0;i<sc-2;i++) midLayouts.push(layouts[i%layouts.length]);
+async function generateLinkedInPost(idea, tone = "story") {
+  const tonePrompt = TONE_PROMPTS[tone] || TONE_PROMPTS.story;
   
-  const midSpec=midLayouts.map((lay,i)=>{
-    if(lay==="stat") return `{"layout":"stat","label":"SECTION ${i+1}","heading":"insight ≤8 words","body":"40-50 words","stat":"XX%","statLabel":"meaning 5-7 words","takeaway":"lesson ≤12 words"}`;
-    if(lay==="tip")  return `{"layout":"tip","label":"SECTION ${i+1}","heading":"tip ≤8 words","body":"35-45 words","tip":"pro tip 30-40 words","takeaway":"lesson ≤12 words"}`;
-    if(lay==="quote")return `{"layout":"quote","label":"SECTION ${i+1}","heading":"principle","quote":"memorable ≤15 words","body":"30-40 words","takeaway":"lesson ≤12 words"}`;
-    if(lay==="list") return `{"layout":"list","label":"SECTION ${i+1}","heading":"list ≤8 words","items":["item ≤8 words","item","item","item"],"body":"20-25 words","takeaway":"lesson ≤12 words"}`;
-    return `{"layout":"highlight","label":"SECTION ${i+1}","heading":"key point ≤8 words","body":"40-50 words","highlight":"key phrase ≤8 words","takeaway":"lesson ≤12 words"}`;
-  }).join(",\n");
+  const prompt = `You are a LinkedIn content expert who helps people share their authentic ideas.
 
-  return `Create a LinkedIn carousel for: "${topic}"
-${post?"Post context:\n\""+post.slice(0,300)+"\"":""}
+User's rough idea: "${idea}"
 
-Content depth: ${sc} slides. Make each slide meaningfully different in layout AND content.
+${tonePrompt}
 
-Return ONLY JSON:
-{"title":"≤7 words","subtitle":"≤12 words","slides":[
-{"layout":"cover","heading":"≤8 words","subheading":"≤14 words"},
-${midSpec},
-{"layout":"cta","heading":"big takeaway ≤10 words","body":"compelling follow ≤25 words"}
-]}`;
+Important: Keep their authentic voice. Don't make it sound like an AI wrote it.
+Return ONLY the post text, nothing else.`;
+
+  return await callGemini(prompt);
 }
 
-function imgAutoPrompt(topic,tone){
-  const styles={
-    story:"cinematic portrait, warm golden hour light, film grain, 35mm bokeh",
-    insight:"abstract editorial, dramatic chiaroscuro, bold contrast, conceptual",
-    list:"clean flat lay, soft diffused light, minimal organized composition",
-    question:"split dual worlds, dramatic lighting, conceptual contrast art",
-    data:"futuristic data streams, neon nodes, dark navy, electric blue glow",
-    mistake:"moody turning point, lone silhouette, cinematic low key"
+async function generateHashtags(idea) {
+  const h = await callGemini(
+    `Give 5 LinkedIn hashtags for: "${idea}". Mix one popular (1M+), two mid (50-500k), two niche. Return ONLY hashtags separated by spaces.`
+  );
+  return h.trim();
+}
+
+async function generateImagePrompt(idea, tone) {
+  const styles = {
+    story: "cinematic, warm golden hour, film grain, shallow depth of field",
+    insight: "abstract editorial, dramatic lighting, bold contrast",
+    list: "clean minimal flat lay, soft light",
+    mistake: "moody cinematic, lone silhouette, turning point"
   };
-  return `${topic}: ${styles[tone]||styles.story}, no text, no watermark, ultra HD 4K, professional LinkedIn cover, 16:9`;
+  return `${idea}: ${styles[tone] || styles.story}, no text, no watermark, ultra HD 4K, 16:9 professional LinkedIn cover`;
 }
 
-function schedPrompt(topic,domain){
-  return `LinkedIn best posting times for: "${topic}" in ${domain||"general"} niche. Based on LinkedIn algorithm 2025.\nReturn ONLY JSON:\n{"best_time":"Day HH:MM AM/PM","why":"1 sentence","slots":[{"day":"Monday","time":"8:00 AM","score":95,"reason":"why"},{"day":"Wednesday","time":"12:00 PM","score":88,"reason":"why"},{"day":"Thursday","time":"9:00 AM","score":82,"reason":"why"}],"avoid":"when NOT to post"}`;
-}
+/* ─── MESSAGE HANDLER ─── */
+async function handleMessage(from, messageBody, buttonId) {
+  const text = (messageBody || "").trim().toLowerCase();
+  const rawText = (messageBody || "").trim();
+  const state = userState[from] || { step: "new" };
+  userState[from] = state;
 
-/* ══════════ DYNAMIC PPT BUILDER ══════════ */
-async function buildPPT(slides,title,themeId){
-  const Lib=window.PptxGenJS;
-  if(!Lib) throw new Error("PPT library not loaded");
-  const p=new Lib(); p.layout="LAYOUT_16x9"; p.title=title;
-  const ST=p.ShapeType;
-  const C=(PPT_THEMES.find(t=>t.id===themeId)||PPT_THEMES[0]).c;
-  const dk=C.dk;
+  console.log(`[MSG] From: ${from} | Step: ${state.step} | Text: "${text.slice(0,60)}"`);
 
-  /* helpers */
-  const rect=(sl,x,y,w,h,col,tr)=>{sl.addShape(ST.rect,{x,y,w,h,fill:tr!=null?{color:col,transparency:tr}:{color:col},line:{color:col,width:0}});};
-  const rrect=(sl,x,y,w,h,col,rad,tr)=>{sl.addShape(ST.roundRect,{x,y,w,h,fill:tr!=null?{color:col,transparency:tr}:{color:col},line:{color:col,width:0},rectRadius:rad||0.16});};
-  const ellip=(sl,x,y,w,h,col,tr)=>{sl.addShape(ST.ellipse,{x,y,w,h,fill:tr!=null?{color:col,transparency:tr}:{color:col},line:{color:col,width:0}});};
-  const tx=(sl,text,x,y,w,h,o)=>sl.addText(text||"",{x,y,w,h,...(o||{})});
-  const numBadge=(sl,text)=>{rrect(sl,9.05,0.14,0.65,0.28,C.brd,0.08);tx(sl,text,9.05,0.14,0.65,0.28,{fontSize:8,color:"FFFFFF",bold:true,align:"center",valign:"middle"});};
-  const labelRow=(sl,label,i,total)=>{
-    tx(sl,label.toUpperCase(),0.42,0.2,7,0.28,{fontSize:9,color:C.acc,bold:true,charSpacing:1.6,align:"left"});
-    numBadge(sl,i+"/"+(total-2));
-  };
-  const headLine=(sl,text)=>tx(sl,text,0.42,0.52,9.1,0.9,{fontSize:23,color:dk?"FFFFFF":C.brd,bold:true,fontFace:"Calibri",lineSpacingMultiple:1.08,align:"left"});
-  const accentBar=(sl,col)=>rect(sl,0.42,1.5,1.8,0.06,col||C.acc);
-  const bodyTx=(sl,text,col)=>tx(sl,text||"",0.42,1.68,5.6,2.55,{fontSize:12.5,color:col||(dk?"8BA3BC":"334155"),align:"left",valign:"top",lineSpacingMultiple:1.55});
-  const takeawayBar=(sl,text)=>{if(!text)return;rrect(sl,0.42,4.68,5.6,0.56,dk?"0F172A":"EFF6FF",0.1);tx(sl,"★ "+text,0.55,4.68,5.35,0.56,{fontSize:11,color:C.acc,bold:true,align:"left",valign:"middle"});};
-  const watermark=(sl)=>tx(sl,"PostFlow AI",0.42,5.3,3,0.2,{fontSize:7.5,color:"64748B",align:"left"});
-  const topBar=(sl,col)=>rect(sl,0,0,10,0.07,col||C.acc);
-
-  for(let i=0;i<slides.length;i++){
-    const s=slides[i];
-    const sl=p.addSlide();
-    const lay=s.layout||(i===0?"cover":i===slides.length-1?"cta":"stat");
-
-    /* ─── COVER ─── */
-    if(lay==="cover"){
-      sl.background={color:C.bg};
-      if(dk){
-        ellip(sl,5.5,-2,7,7,C.brd,82); ellip(sl,7.8,3.5,4,4,C.acc,88); ellip(sl,-2,3,4,4,C.acc,91);
-        rect(sl,0,0,0.08,5.625,C.acc);
-        rrect(sl,0.42,0.28,2.1,0.36,C.brd);
-        tx(sl,"⚡ PostFlow AI",0.42,0.28,2.1,0.36,{fontSize:9,color:"FFFFFF",bold:true,align:"center",valign:"middle"});
-        tx(sl,s.heading||title,0.42,1.0,7.4,2.4,{fontSize:35,color:C.tx,bold:true,fontFace:"Calibri",align:"left",lineSpacingMultiple:1.08});
-        rect(sl,0.42,3.55,2.8,0.06,C.acc);
-        tx(sl,s.subheading||"",0.42,3.75,7.4,0.8,{fontSize:14,color:C.sub,align:"left"});
-        rrect(sl,8.95,0.28,0.72,0.3,C.brd);
-        tx(sl,"1/"+slides.length,8.95,0.28,0.72,0.3,{fontSize:8,color:"FFFFFF",align:"center",valign:"middle"});
-        rect(sl,0,5.22,10,0.4,"020508");
-        tx(sl,"PostFlow AI  ·  "+slides.length+" slides",0.42,5.22,9,0.4,{fontSize:8.5,color:"475569",align:"left",valign:"middle"});
-      } else {
-        sl.background={color:"FFFFFF"};
-        rect(sl,0,0,4.8,5.625,C.brd);
-        ellip(sl,0.3,3.2,5.2,5.2,C.acc,87); ellip(sl,-1.5,-1,3.5,3.5,"FFFFFF",87);
-        tx(sl,"⚡ PostFlow AI",0.4,0.3,4.1,0.36,{fontSize:10,color:"FFFFFF",bold:true,align:"left"});
-        tx(sl,s.heading||title,0.4,1.0,4.1,2.7,{fontSize:30,color:"FFFFFF",bold:true,fontFace:"Calibri",align:"left",lineSpacingMultiple:1.1});
-        rect(sl,0.4,3.75,2.0,0.07,"FFFFFF");
-        tx(sl,s.subheading||"",0.4,3.95,4.1,0.65,{fontSize:13,color:"DBEAFE",align:"left"});
-        tx(sl,"PostFlow AI  ·  "+slides.length+" slides",0.4,5.22,4,0.3,{fontSize:8.5,color:"BFDBFE",align:"left",valign:"middle"});
-        ellip(sl,5.2,0.3,4.5,4.5,C.acc,90); ellip(sl,6,1.5,2.8,2.8,C.brd,85);
-        tx(sl,(slides.length-2)+"\nInsights",5.0,1.2,5.0,2.5,{fontSize:50,color:C.brd,bold:true,align:"center",lineSpacingMultiple:.95});
-      }
-    }
-
-    /* ─── STAT (right panel with big number) ─── */
-    else if(lay==="stat"){
-      sl.background={color:dk?C.s1:"F8FAFC"};
-      topBar(sl,C.acc); labelRow(sl,s.label||"INSIGHT",i,slides.length);
-      headLine(sl,s.heading||""); accentBar(sl); bodyTx(sl,s.body);
-      /* Stat card */
-      rrect(sl,6.45,1.0,3.2,4.0,C.brd,0.2);
-      ellip(sl,6.7,1.1,2.8,2.8,C.acc,90);
-      tx(sl,"📊",6.45,1.3,3.2,0.7,{fontSize:28,align:"center"});
-      tx(sl,s.stat||"",6.45,2.05,3.2,1.05,{fontSize:44,color:C.acc,bold:true,align:"center"});
-      rect(sl,7.3,3.18,1.5,0.05,C.acc);
-      tx(sl,s.statLabel||"",6.55,3.32,3.0,1.0,{fontSize:10.5,color:dk?"94A3B8":"FFFFFF",align:"center",lineSpacingMultiple:1.4});
-      takeawayBar(sl,s.takeaway); watermark(sl);
-    }
-
-    /* ─── TIP (right side tip card) ─── */
-    else if(lay==="tip"){
-      sl.background={color:dk?"0D1220":"FFFFFF"};
-      topBar(sl,C.brd); labelRow(sl,s.label||"PRO TIP",i,slides.length);
-      headLine(sl,s.heading||""); accentBar(sl,C.brd); bodyTx(sl,s.body);
-      rrect(sl,6.45,1.0,3.2,4.0,dk?"0F172A":"EFF6FF",0.2);
-      rrect(sl,6.45,1.0,3.2,0.72,C.brd,0.2);
-      tx(sl,"💡 Pro Tip",6.45,1.0,3.2,0.72,{fontSize:12,color:"FFFFFF",bold:true,align:"center",valign:"middle"});
-      tx(sl,s.tip||"",6.55,1.86,3.02,2.9,{fontSize:11.5,color:dk?"C4CFD8":"1E3A5F",align:"left",valign:"top",lineSpacingMultiple:1.5});
-      takeawayBar(sl,s.takeaway); watermark(sl);
-    }
-
-    /* ─── QUOTE (full width, giant quotation marks) ─── */
-    else if(lay==="quote"){
-      sl.background={color:dk?"080D18":"F0F9FF"};
-      topBar(sl,C.acc); labelRow(sl,s.label||"PRINCIPLE",i,slides.length);
-      tx(sl,"\u201C",0.12,0.45,1.5,2.0,{fontSize:130,color:C.acc,align:"left",valign:"top",bold:true});
-      tx(sl,s.quote||s.heading||"",1.75,1.05,7.85,1.95,{fontSize:23,color:dk?"FFFFFF":"0C2340",bold:true,fontFace:"Calibri",align:"left",lineSpacingMultiple:1.15});
-      tx(sl,"\u201D",8.38,1.8,1.5,1.5,{fontSize:130,color:C.acc,align:"right",valign:"top",bold:true});
-      rect(sl,0.42,3.22,9.1,0.06,dk?"1E293B":"CBD5E1");
-      tx(sl,s.body||"",0.42,3.42,9.1,1.4,{fontSize:12.5,color:dk?"8BA3BC":"334155",align:"left",lineSpacingMultiple:1.55});
-      if(s.takeaway){rrect(sl,0.42,4.68,9.1,0.56,dk?"0F172A":"FFF7ED",0.1);tx(sl,"→ "+s.takeaway,0.55,4.68,8.8,0.56,{fontSize:11,color:C.acc,bold:true,align:"left",valign:"middle"});}
-      watermark(sl);
-    }
-
-    /* ─── LIST (numbered items) ─── */
-    else if(lay==="list"){
-      sl.background={color:dk?"0A1020":"FAFAFE"};
-      topBar(sl,C.brd); labelRow(sl,s.label||"KEY STEPS",i,slides.length);
-      headLine(sl,s.heading||""); accentBar(sl,C.brd);
-      const items=s.items||[s.body||""];
-      const ballColors=[C.brd,C.acc,C.acc,C.brd];
-      items.slice(0,4).forEach((item,ii)=>{
-        const y=1.68+ii*0.82;
-        rrect(sl,0.42,y,0.52,0.52,ballColors[ii%4],0.22);
-        tx(sl,(ii+1).toString(),0.42,y,0.52,0.52,{fontSize:17,color:"FFFFFF",bold:true,align:"center",valign:"middle"});
-        rrect(sl,1.06,y,8.5,0.52,dk?"0F1A2E":"EFF6FF",0.06);
-        tx(sl,item,1.2,y,8.2,0.52,{fontSize:12.5,color:dk?"D1D5DB":"1E3A5F",align:"left",valign:"middle"});
-      });
-      takeawayBar(sl,s.takeaway); watermark(sl);
-    }
-
-    /* ─── HIGHLIGHT (large callout phrase + body) ─── */
-    else if(lay==="highlight"){
-      sl.background={color:dk?C.s1:"FFFFFF"};
-      topBar(sl,C.acc); labelRow(sl,s.label||"KEY POINT",i,slides.length);
-      headLine(sl,s.heading||""); accentBar(sl);
-      bodyTx(sl,s.body,dk?"8BA3BC":"334155");
-      /* Highlight card right */
-      rrect(sl,6.45,1.0,3.2,4.0,C.brd,0.2);
-      ellip(sl,6.6,2.2,3.0,3.0,C.acc,88);
-      tx(sl,s.highlight||"",6.45,1.8,3.2,1.5,{fontSize:20,color:C.acc,bold:true,align:"center",fontFace:"Calibri",lineSpacingMultiple:1.1});
-      rect(sl,7.1,3.35,1.5,0.05,C.acc);
-      tx(sl,s.body?(s.body.slice(0,90)+"…"):"",6.55,3.55,3.0,1.15,{fontSize:10,color:dk?"94A3B8":"FFFFFF",align:"center",lineSpacingMultiple:1.4});
-      takeawayBar(sl,s.takeaway); watermark(sl);
-    }
-
-    /* ─── CTA ─── */
-    else if(lay==="cta"){
-      sl.background={color:C.bg};
-      if(dk){
-        ellip(sl,4.5,-2,7,7,C.brd,85); ellip(sl,-2,2.5,5.5,5.5,C.acc,91);
-        rect(sl,0,0,0.08,5.625,C.acc);
-        rrect(sl,0.42,0.35,2.4,0.34,C.acc);
-        tx(sl,"KEY TAKEAWAY",0.42,0.35,2.4,0.34,{fontSize:8.5,color:C.bg,bold:true,align:"center",valign:"middle"});
-        tx(sl,s.heading||"Take Action Today",0.42,0.88,8.6,2.0,{fontSize:30,color:C.tx,bold:true,fontFace:"Calibri",align:"left",lineSpacingMultiple:1.1});
-        rect(sl,0.42,3.0,2.8,0.07,C.acc);
-        tx(sl,s.body||"",0.42,3.18,7.5,1.35,{fontSize:13,color:C.sub,align:"left",lineSpacingMultiple:1.5});
-        rrect(sl,0.42,4.6,3.8,0.64,C.acc,0.14);
-        tx(sl,"Follow for more insights →",0.42,4.6,3.8,0.64,{fontSize:13,color:C.bg,bold:true,align:"center",valign:"middle"});
-      } else {
-        sl.background={color:C.brd};
-        ellip(sl,4.5,-2,7,7,"FFFFFF",90); ellip(sl,-2,2.5,5.5,5.5,C.acc,91);
-        rect(sl,0,0,0.08,5.625,"FFFFFF");
-        rrect(sl,0.42,0.35,2.4,0.34,"FFFFFF");
-        tx(sl,"KEY TAKEAWAY",0.42,0.35,2.4,0.34,{fontSize:8.5,color:C.brd,bold:true,align:"center",valign:"middle"});
-        tx(sl,s.heading||"Take Action Today",0.42,0.88,8.6,2.0,{fontSize:30,color:"FFFFFF",bold:true,fontFace:"Calibri",align:"left",lineSpacingMultiple:1.1});
-        rect(sl,0.42,3.0,2.8,0.07,"FFFFFF");
-        tx(sl,s.body||"",0.42,3.18,7.5,1.35,{fontSize:13,color:"DBEAFE",align:"left",lineSpacingMultiple:1.5});
-        rrect(sl,0.42,4.6,3.8,0.64,"FFFFFF",0.14);
-        tx(sl,"Follow for more insights →",0.42,4.6,3.8,0.64,{fontSize:13,color:C.brd,bold:true,align:"center",valign:"middle"});
-      }
-      rect(sl,0,5.22,10,0.42,"00000044");
-      tx(sl,"PostFlow AI  ·  Made for LinkedIn Creators",0.42,5.22,9,0.42,{fontSize:8.5,color:"9CA3AF",align:"left",valign:"middle"});
-    }
-  }
-  return await p.write({outputType:"blob"});
-}
-
-/* ══════════ UI ATOMS ══════════ */
-function Spin({c,s}){const col=c||"#fff",sz=s||5;return <span style={{display:"inline-flex",gap:3,alignItems:"center"}}>{[0,.15,.3].map((d,i)=><span key={i} style={{width:sz,height:sz,borderRadius:"50%",background:col,display:"inline-block",animation:`dot 1.2s ${d}s infinite ease-in-out`}}/>)}</span>;}
-function Badge({ch,col}){const c=col||"#2563EB";return <span style={{background:c+"1A",color:c,fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,border:`1px solid ${c}30`}}>{ch}</span>;}
-function Msg({type,ch}){const m={info:{bg:"#EFF6FF",b:"#BFDBFE",c:"#1D4ED8"},success:{bg:"#F0FDF4",b:"#BBF7D0",c:"#15803D"},warn:{bg:"#FFFBEB",b:"#FDE68A",c:"#92400E"},error:{bg:"#FEF2F2",b:"#FECACA",c:"#991B1B"}};const s=m[type||"info"]||m.info;return <div style={{background:s.bg,border:`1px solid ${s.b}`,color:s.c,borderRadius:12,padding:"11px 15px",fontSize:13,fontWeight:500,marginTop:10,lineHeight:1.6}}>{ch}</div>;}
-
-/* ══════════ LANDING ══════════ */
-function Landing({onLaunch}){
-  return <div style={{fontFamily:"'Inter',sans-serif",background:"#060B18",minHeight:"100vh",color:"#F0F4FF"}}>
-    <style>{`
-      .lcta{background:linear-gradient(135deg,#2563EB,#1D4ED8);color:#fff;border:none;padding:15px 42px;border-radius:50px;font-size:16px;font-weight:700;cursor:pointer;animation:glow 3s infinite;transition:transform .2s;font-family:'Inter',sans-serif}
-      .lcta:hover{transform:translateY(-2px)}
-      .lsec{background:transparent;color:#38BDF8;border:1.5px solid rgba(56,189,248,.4);padding:9px 22px;border-radius:50px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif}
-      .lsec:hover{background:rgba(56,189,248,.08)}
-      .feat{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:26px;transition:all .25s}
-      .feat:hover{background:rgba(255,255,255,.06);border-color:rgba(56,189,248,.3);transform:translateY(-4px)}
-    `}</style>
-    <div style={{position:"fixed",inset:0,background:"radial-gradient(ellipse 70% 40% at 50% -5%,rgba(37,99,235,.18) 0%,transparent 55%)",pointerEvents:"none"}}/>
-    <nav style={{position:"sticky",top:0,zIndex:100,background:"rgba(6,11,24,.9)",backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(255,255,255,.06)",padding:"14px 40px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:20,letterSpacing:"-1px"}}>PostFlow<span style={{color:"#38BDF8"}}> AI</span></div>
-      <div style={{display:"flex",gap:12,alignItems:"center"}}>
-        <span style={{background:"rgba(37,211,102,.12)",color:"#25D366",fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:20,border:"1px solid rgba(37,211,102,.2)"}}>💬 WhatsApp Beta</span>
-        <button className="lsec" onClick={onLaunch}>Open App →</button>
-      </div>
-    </nav>
-    <div style={{textAlign:"center",padding:"90px 24px 70px",maxWidth:760,margin:"0 auto"}}>
-      <div style={{marginBottom:20}}><span style={{background:"rgba(245,158,11,.12)",color:"#F59E0B",fontSize:12,fontWeight:700,padding:"5px 16px",borderRadius:20,border:"1px solid rgba(245,158,11,.2)"}}>🚀 Your ideas deserve better packaging</span></div>
-      <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:"clamp(36px,6vw,64px)",fontWeight:800,lineHeight:1.05,letterSpacing:"-3px",margin:"0 0 22px"}}>
-        Rough idea →<br/><span style={{background:"linear-gradient(135deg,#38BDF8,#2563EB,#8B5CF6)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>polished LinkedIn post</span><br/>in 3 minutes
-      </h1>
-      <p style={{fontSize:17,color:"#94A3B8",lineHeight:1.7,marginBottom:38,maxWidth:520,margin:"0 auto 38px"}}>Not an AI-post factory. A tool that takes YOUR rough idea and packages it into posts, carousels, and AI images — in your voice.</p>
-      <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
-        <button className="lcta" onClick={onLaunch}>Start Creating Free →</button>
-        <button className="lsec" onClick={onLaunch}>See features ↓</button>
-      </div>
-      <div style={{marginTop:14,fontSize:12,color:"#475569"}}>No credit card · Free Gemini key · Your ideas stay yours</div>
-    </div>
-    <div style={{maxWidth:900,margin:"0 auto 80px",padding:"0 24px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(255px,1fr))",gap:18}}>
-      {[["🧠","Polishes YOUR Ideas","Paste rough notes, bullets, or a draft. AI refines it in your voice — not generic AI-speak."],
-        ["📊","Dynamic PPT Carousel","AI decides slide count based on content. 5 different layouts: stat, tip, quote, list, highlight."],
-        ["🎨","Real AI Images","Gemini AI + Pollinations FLUX. Zero stock photos. Every image AI-generated fresh."],
-        ["🎭","6 Post Formats","Story, Hot Take, List, Conversation, Data, Mistake — each uses a different viral structure."],
-        ["📅","Smart Scheduler","Best day + time based on your topic. Plus browser notification reminders."],
-        ["💬","WhatsApp Bot","Text your idea → get post + PPT. Register for beta."]
-      ].map(([ic,t,d])=><div key={t} className="feat"><div style={{fontSize:28,marginBottom:12}}>{ic}</div><div style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:15,marginBottom:8,color:"#E2E8F0"}}>{t}</div><div style={{color:"#64748B",fontSize:13,lineHeight:1.65}}>{d}</div></div>)}
-    </div>
-    {/* WhatsApp section */}
-    <div style={{maxWidth:640,margin:"0 auto 80px",padding:"0 24px"}}>
-      <div style={{background:"rgba(37,211,102,.05)",border:"1px solid rgba(37,211,102,.2)",borderRadius:24,padding:32}}>
-        <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:16}}>
-          <div style={{width:48,height:48,borderRadius:14,background:"rgba(37,211,102,.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>💬</div>
-          <div><div style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:17,color:"#F0F4FF"}}>WhatsApp Integration</div><div style={{fontSize:12,color:"#4B7C5F",marginTop:2}}>Register now for beta access</div></div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:18}}>
-          {["1️⃣ Register on our site","2️⃣ Get WhatsApp number","3️⃣ Text your idea anytime","4️⃣ Receive post + PPT link"].map(s=><div key={s} style={{background:"rgba(37,211,102,.07)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#A7F3D0",border:"1px solid rgba(37,211,102,.12)"}}>{s}</div>)}
-        </div>
-        <button onClick={onLaunch} style={{background:"#25D366",color:"#fff",border:"none",padding:"12px 28px",borderRadius:50,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Join WhatsApp Beta →</button>
-      </div>
-    </div>
-    <div style={{textAlign:"center",borderTop:"1px solid rgba(255,255,255,.06)",padding:"50px 24px"}}>
-      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:26,marginBottom:10,letterSpacing:"-1px"}}>Ready to level up your LinkedIn?</div>
-      <p style={{color:"#64748B",marginBottom:28,fontSize:14}}>Free. No signup. Just your free Gemini key.</p>
-      <button className="lcta" onClick={onLaunch}>Open PostFlow AI →</button>
-    </div>
-  </div>;
-}
-
-/* ══════════ MAIN TOOL ══════════ */
-function Tool({onHome}){
-  const [key,setKey]=useState(()=>localStorage.getItem("pf_gk")||"");
-  const [keySaved,setKeySaved]=useState(()=>!!localStorage.getItem("pf_gk"));
-  const [showKey,setShowKey]=useState(false);
-  const [idea,setIdea]=useState("");
-  const [domain,setDomain]=useState("");
-  const [custom,setCustom]=useState("");
-  const [tone,setTone]=useState("story");
-  const [slideCount,setSlideCount]=useState(7);
-  const [topics,setTopics]=useState([]);
-  const [picked,setPicked]=useState(null);
-  const [post,setPost]=useState("");
-  const [htags,setHtags]=useState("");
-  const [change,setChange]=useState("");
-  const [showChange,setShowChange]=useState(false);
-  const [pptSlides,setPptSlides]=useState(null);
-  const [pptBlob,setPptBlob]=useState(null);
-  const [pptTheme,setPptTheme]=useState("midnight");
-  const [carouselText,setCarouselText]=useState("");
-  const [imgPrompt,setImgPrompt]=useState("");
-  const [imgSrc,setImgSrc]=useState(null);
-  const [imgSvc,setImgSvc]=useState("");
-  const [imgMode,setImgMode]=useState("flux");
-  
-  const [schedule,setSchedule]=useState(null);
-  const [schedDay,setSchedDay]=useState("Tuesday");
-  const [schedTime,setSchedTime]=useState("8:00 AM");
-  const [reminderSet,setReminderSet]=useState(false);
-  const [step,setStep]=useState(1);
-  const [busy,setBusy]=useState({});
-  const [msgs,setMsgs]=useState({});
-  const [copied,setCopied]=useState(false);
-  const [copiedCarousel,setCopiedCarousel]=useState(false);
-  const [tab,setTab]=useState("post");
-
-  const sb=(k,v)=>setBusy(p=>({...p,[k]:v}));
-  const sm=(k,v)=>setMsgs(p=>({...p,[k]:v}));
-
-  function saveKey(){
-    if(!key.trim()||key.trim().length<10){sm("key","⚠️ Enter a valid key (starts with AIza...)");return;}
-    localStorage.setItem("pf_gk",key.trim());setKeySaved(true);sm("key","✅ Your key saved — unlimited use enabled!");
+  /* ── NEW USER or restart ── */
+  if (state.step === "new" || text === "hi" || text === "hello" || text === "start" || text === "restart") {
+    state.step = "waiting_tone";
+    await sendWhatsApp(from,
+      `👋 Welcome to *PostFlow AI*!\n\nI turn your rough ideas into polished LinkedIn posts in seconds.\n\n*Reply with a number to pick your format:*\n\n1️⃣ *Story* — Personal journey & lessons\n2️⃣ *Hot Take* — Bold opinion + data\n3️⃣ *List Post* — Actionable tips\n4️⃣ *Mistake* — Failure you learned from\n\nOr just text your idea directly and I'll handle the rest! 💡`
+    );
+    return;
   }
 
-  async function getTopics(){
-    if(!domain&&!custom.trim()){sm("top","⚠️ Choose domain or type topic");return;}
-    sb("top",true);sm("top","");
-    try{
-      const r=await aiText(topicsPrompt(domain,custom,idea,tone),key);
-      const p=parseJSON(r);
-      if(p?.length){setTopics(p);setStep(2);sm("top","");}
-      else sm("top","⚠️ Could not parse — try again.");
-    }catch(e){sm("top","❌ "+e.message);}
-    sb("top",false);
-  }
+  /* ── TONE SELECTION ── */
+  if (state.step === "waiting_tone") {
+    let selectedTone = null;
 
-  function pickTopic(t){setPicked(t);setPost("");setHtags("");setPptSlides(null);setPptBlob(null);setImgSrc(null);setShowChange(false);setChange("");setSchedule(null);setCarouselText("");}
-  function useOwn(){if(!custom.trim())return;pickTopic({title:custom.trim(),hook:"Your topic",why:"Custom",emoji:"✍️",angle:"original perspective",engagement_type:"comment",reach:"medium"});setTopics([]);setStep(2);}
+    /* Number replies */
+    if (text === "1" || text.includes("story"))   selectedTone = "story";
+    if (text === "2" || text.includes("hot") || text.includes("take") || text.includes("insight")) selectedTone = "insight";
+    if (text === "3" || text.includes("list"))    selectedTone = "list";
+    if (text === "4" || text.includes("mistake") || text.includes("fail")) selectedTone = "mistake";
 
-  async function draftPost(isRefine){
-    sb("post",true);sm("post","");
-    try{
-      let p;
-      if(isRefine&&change.trim()){
-        p=await aiText(`LinkedIn post:\n"""\n${post}\n"""\nChange: "${change}"\nApply exactly. Keep format and voice. Return ONLY the post.`,key);
-      } else {
-        const topic=picked?.title||idea.slice(0,80)||"LinkedIn content";
-        p=await aiText(postPrompt(topic,tone,idea,picked?.angle||"authentic"),key);
-        if(!htags){const h=await aiText(`LinkedIn hashtags for: "${topic}". Return ONLY 5 hashtags separated by spaces.`,key,true);setHtags(h.trim());}
-        if(!imgPrompt) setImgPrompt(imgAutoPrompt(topic,tone));
-      }
-      setPost(p);setStep(3);setShowChange(false);setChange("");setTab("post");
-    }catch(e){sm("post","❌ "+e.message);}
-    sb("post",false);
-  }
-
-  async function draftFromIdea(){
-    if(!idea.trim()){sm("idea","⚠️ Add your idea first");return;}
-    pickTopic({title:idea.trim().slice(0,70),hook:"Draft",why:"Yours",emoji:"💡",angle:"your unique perspective",engagement_type:"comment",reach:"medium"});
-    setTopics([]);setStep(2);
-    await draftPost(false);
-  }
-
-  async function genPPT(){
-    sb("ppt",true); sm("ppt","🤖 Presenton AI designing your slides...");
-    try{
-      const topic = picked?.title || idea.slice(0,60) || "LinkedIn Insights";
-
-      /* Step 1 — Ask Gemini to write the slide content */
-      sm("ppt","✍️ AI writing slide content...");
-      const contentPrompt = `Create a ${slideCount}-slide LinkedIn carousel about: "${topic}"
-${post ? `Based on this post:\n"${post.slice(0,400)}"` : ""}
-
-Write compelling slide content. Return ONLY valid JSON:
-{
-  "title": "catchy title max 8 words",
-  "slides": [
-    {"heading": "slide title", "content": "2-3 sentences of insight", "type": "title"},
-    {"heading": "slide title", "content": "key insight 2-3 sentences", "stat": "XX%", "type": "stat"},
-    {"heading": "slide title", "content": "actionable advice 2-3 sentences", "type": "tip"},
-    {"heading": "slide title", "content": "memorable principle 2-3 sentences", "quote": "short quotable phrase", "type": "quote"},
-    {"heading": "slide title", "content": "numbered insight 2-3 sentences", "type": "list", "items": ["point 1", "point 2", "point 3"]},
-    {"heading": "final takeaway", "content": "call to action 2-3 sentences", "type": "cta"}
-  ]
-}`;
-      const raw = await aiText(contentPrompt, key);
-      const parsed = parseJSON(raw);
-      if(!parsed?.slides){ sm("ppt","⚠️ Could not parse slides. Retry."); sb("ppt",false); return; }
-      setPptSlides(parsed.slides);
-
-      /* Build slide descriptions for Presenton prompt */
-      const slideDescriptions = parsed.slides.map((s,i) =>
-        `Slide ${i+1}: ${s.heading}. ${s.content}${s.stat?" Key stat: "+s.stat:""}${s.quote?" Quote: "+s.quote:""}${s.items?" Points: "+s.items.join(", "):""}`
-      ).join(" | ");
-
-      /* Step 2 — Send to Presenton with correct endpoint + FormData */
-      sm("ppt","🎨 Presenton designing beautiful slides...");
-
-      const formData = new FormData();
-      formData.append("prompt", `Professional LinkedIn carousel about: ${topic}. ${slideDescriptions}. Style: modern, clean, professional. Bold typography.`);
-      formData.append("n_slides", String(slideCount));
-      formData.append("theme", "general");
-      formData.append("export_as", "pptx");
-
-      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/generate/presentation", {
-        method: "POST",
-        body: formData
-      });
-
-      if(!presentonRes.ok){
-        const errText = await presentonRes.text();
-        throw new Error("Presenton error " + presentonRes.status + ": " + errText.slice(0,100));
-      }
-
-      const presentonData = await presentonRes.json();
-      console.log("Presenton response:", JSON.stringify(presentonData).slice(0,200));
-
-      /* Presenton returns presentation_id and path */
-      const pptUrl = presentonData.path ||
-                     presentonData.download_url ||
-                     presentonData.url ||
-                     (presentonData.presentation_id ? PRESENTON_URL + "/api/v1/ppt/export/presentation?presentation_id=" + presentonData.presentation_id + "&export_as=pptx" : null);
-
-      if(pptUrl){
-        setPptBlob(pptUrl.startsWith("http") ? pptUrl : PRESENTON_URL + pptUrl);
-        sm("ppt","✅ Beautiful Presenton slides ready! Click Download.");
-      } else {
-        throw new Error("No download URL in Presenton response: " + JSON.stringify(presentonData).slice(0,100));
-      }
-
-      /* Build carousel text for copy */
-      const ctxt = parsed.slides.map((s,i) =>
-        `SLIDE ${i+1}\n${s.heading}\n${s.content}${s.stat?"\n📊 "+s.stat:""}${s.items?"\n"+s.items.map((it,ii)=>`${ii+1}. ${it}`).join("\n"):""}`
-      ).join("\n\n---\n\n");
-      setCarouselText(ctxt);
-
-    }catch(e){
-      sm("ppt","❌ "+e.message);
-      console.error("PPT error:", e);
+    /* If they just sent their idea directly — use story as default */
+    if (!selectedTone && rawText.length > 20) {
+      selectedTone = "story";
+      state.tone = selectedTone;
+      state.step = "waiting_idea";
+      /* Process their message directly as the idea */
+      await handleMessage(from, messageBody, null);
+      return;
     }
-    sb("ppt",false);
-  }
 
-  function dlPPT(){
-    if(!pptBlob) return;
-    /* pptBlob is now a URL string from Presenton */
-    if(typeof pptBlob === "string" && pptBlob.startsWith("http")){
-      window.open(pptBlob, "_blank");
-    } else if(pptBlob instanceof Blob){
-      /* fallback blob */
-      const url = URL.createObjectURL(pptBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = ((picked?.title||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  function copyCarousel(){navigator.clipboard.writeText(carouselText);setCopiedCarousel(true);setTimeout(()=>setCopiedCarousel(false),2500);}
-
-  async function autoImgPrompt(){
-    sb("imgP",true);
-    try{
-      const topic = picked?.title || idea.slice(0,60) || "professional content";
-      const toneVisuals = {
-        story:    "warm cinematic scene, golden hour light, 35mm film look, shallow depth of field, one person silhouette or empty meaningful space",
-        insight:  "bold abstract composition, dramatic side lighting, dark background, sharp geometric shapes, electric color accent",
-        list:     "clean minimal flat lay, soft overhead diffused light, white or light grey background, organized objects, editorial magazine style",
-        question: "two contrasting worlds split composition, dramatic lighting divide, thought-provoking visual tension",
-        data:     "dark navy background, glowing data network nodes, electric blue light trails, futuristic tech aesthetic, depth and dimension",
-        mistake:  "lone figure at turning point, moody chiaroscuro lighting, fog or mist, cinematic widescreen, contemplative atmosphere"
-      };
-      const visual = toneVisuals[tone] || toneVisuals.story;
-      const p = await aiText(
-        `You are a professional art director creating LinkedIn cover images.
-
-Topic: "${topic}"
-Visual style needed: ${visual}
-
-Write a detailed image generation prompt (3-4 sentences) that:
-1. Describes the EXACT visual scene, not the topic
-2. Specifies lighting (e.g. "soft side lighting from left", "dramatic chiaroscuro")
-3. Specifies color palette (e.g. "deep navy #0A0F1E with electric cyan accents")
-4. Specifies camera/composition (e.g. "wide angle, rule of thirds, shallow DOF")
-5. Ends with: "No text, no words, no watermark, ultra HD 4K, 16:9 landscape, professional photography"
-
-Return ONLY the prompt. No explanation. No quotes.`,
-        key, true
+    if (selectedTone) {
+      state.tone = selectedTone;
+      state.step = "waiting_idea";
+      const toneNames = { story:"📖 Story", insight:"💡 Hot Take", list:"📋 List Post", mistake:"❌ Mistake" };
+      await sendWhatsApp(from,
+        `${toneNames[selectedTone]} selected ✅\n\nNow send me your idea!\n\nExamples:\n• "I grew my LinkedIn to 5k followers in 90 days"\n• "Cold outreach tip that got me 40% reply rate"\n• Bullet points you want expanded\n• A rough draft for AI to polish\n\n_Send anything — I'll turn it into a great post_ 🚀`
       );
-      setImgPrompt(p.trim());
+    } else {
+      await sendWhatsApp(from,
+        `Reply with:\n1️⃣ Story\n2️⃣ Hot Take\n3️⃣ List Post\n4️⃣ Mistake\n\nOr just send your idea directly!`
+      );
     }
-    catch(e){ sm("img","❌ Prompt failed: "+e.message); }
-    sb("imgP",false);
+    return;
   }
 
-  async function genImg(){
-    if(!imgPrompt.trim())return;
-    setImgSrc(null);setImgSvc("");
-    sb("img",true);
-    const modelLabel=(PUTER_MODELS.find(m=>m.id===imgMode)||PUTER_MODELS[0]).label;
-    sm("img","🎨 Generating with "+modelLabel+"... (~15-30s)");
-    try{
-      const {src,service}=await generateImage(imgPrompt.trim(),imgMode);
-      setImgSrc(src);setImgSvc(service);sm("img","✅ AI image ready!");
-    }catch(e){
-      sm("img","❌ "+e.message+"\n\nTip: Make sure you allow Puter.js popup if it appears. Try refreshing if it fails.");
+  /* ── IDEA RECEIVED → GENERATE POST ── */
+  if (state.step === "waiting_idea") {
+    if (rawText.length < 10) {
+      await sendWhatsApp(from, `Send me your idea! A sentence or two about what you want to post about 💡`);
+      return;
     }
-    sb("img",false);
+
+    state.step = "generating";
+    await sendWhatsApp(from, `✍️ Got it! Writing your LinkedIn post...\n_Takes about 10 seconds_`);
+
+    try {
+      const tone = state.tone || "story";
+      const tonePrompts = {
+        story: "storytelling format with hook, personal insight, 3 lessons, CTA",
+        insight: "controversial opening claim, expand argument, counter + rebuttal, polarizing question",
+        list: "numbered list format with bold concepts and brief explanations",
+        mistake: "failure stated upfront, story, turning point, 3 things learned"
+      };
+
+      const prompt = `You are a LinkedIn content expert. Write a LinkedIn post about:\n"${rawText}"\n\nFormat: ${tonePrompts[tone]}\n\nRules:\n- 150-220 words\n- First person, conversational\n- No "I'm excited to share", no em-dashes, no corporate jargon\n- Blank lines between sections\n- One idea per line\n\nReturn ONLY the post text.`;
+
+      const hashPrompt = `Give 5 LinkedIn hashtags for: "${rawText}". Return ONLY hashtags separated by spaces.`;
+
+      const [post, hashtags] = await Promise.all([
+        callGemini(prompt, false),        /* complex model for post */
+        callGemini(hashPrompt, true)      /* simple model for hashtags */
+      ]);
+
+      await sendWhatsApp(from,
+        `✅ *Your LinkedIn Post:*\n\n━━━━━━━━━━━━━━━\n\n${post}\n\n━━━━━━━━━━━━━━━\n\n*Hashtags:* ${hashtags.trim()}`
+      );
+
+      await new Promise(r => setTimeout(r, 1000));
+      await sendWhatsApp(from,
+        `*What next?*\n\n1️⃣ New post\n2️⃣ Change this post\n3️⃣ Get image prompt for cover\n\nOr just send a new idea! 💡`
+      );
+
+      state.lastIdea = rawText;
+      state.lastPost = post;
+      state.step = "post_done";
+
+    } catch(err) {
+      console.error("Generation error:", err);
+      await sendWhatsApp(from, `❌ Error: ${err.message}\n\nPlease try again or visit postflow-ai-iota.vercel.app`);
+      state.step = "waiting_idea";
+    }
+    return;
   }
 
-  async function getSched(){
-    sb("sched",true);sm("sched","");
-    try{const topic=picked?.title||idea.slice(0,60)||"post";const r=await aiText(schedPrompt(topic,domain),key,true);const p=parseJSON(r);if(p?.slots){setSchedule(p);sm("sched","✅ Best times found!");}else sm("sched","⚠️ Could not parse. Try again.");}
-    catch(e){sm("sched","❌ "+e.message);}
-    sb("sched",false);
+  /* ── POST DONE ── */
+  if (state.step === "post_done" || state.step === "generating") {
+    if (state.step === "generating") {
+      await sendWhatsApp(from, `⏳ Still generating... please wait a moment!`);
+      return;
+    }
+
+    if (text === "1" || text.includes("new")) {
+      state.step = "waiting_tone"; state.tone = null;
+      await handleMessage(from, "hi", null);
+      return;
+    }
+    if (text === "2" || text.includes("change")) {
+      state.step = "waiting_idea";
+      await sendWhatsApp(from, `Send me your idea again and I'll write a different version 🔄`);
+      return;
+    }
+    if (text === "3" || text.includes("image")) {
+      const styles = {
+        story:   "warm cinematic golden hour light, 35mm film grain, shallow depth of field, one meaningful silhouette",
+        insight: "bold abstract composition, dramatic side lighting, dark background, electric color accent, sharp geometric shapes",
+        list:    "clean minimal flat lay, soft overhead diffused light, editorial magazine style, white background, organized objects",
+        mistake: "lone figure at turning point, moody chiaroscuro lighting, cinematic fog, deep shadows, contemplative atmosphere"
+      };
+      const style = styles[state.tone||"story"];
+      await sendWhatsApp(from,
+        `🎨 *Professional Image Prompt:*\n\n_"${state.lastIdea||"professional LinkedIn content"}: ${style}, deep navy and blue color palette, no text, no words, no watermark, ultra HD 4K, 16:9 landscape, professional photography"_\n\nPaste this at:\n🌸 *image.pollinations.ai* (free, no signup)\n\n💡 Tip: More detail = better image. You can edit the prompt before generating.`
+      );
+      return;
+    }
+    /* Treat as new idea */
+    if (rawText.length > 15) {
+      state.step = "waiting_idea";
+      await handleMessage(from, messageBody, null);
+      return;
+    }
+    await sendWhatsApp(from, `Send *hi* to start a new post, or just send your idea directly! 💡`);
+    return;
   }
 
-  /* Browser notification reminder */
-  function setReminder(){
-    if(!("Notification" in window)){alert("Your browser doesn't support notifications. Try Chrome.");return;}
-    Notification.requestPermission().then(perm=>{
-      if(perm==="granted"){
-        /* Calculate ms until scheduled day+time this week */
-        const now=new Date();
-        const dayIdx={Monday:1,Tuesday:2,Wednesday:3,Thursday:4,Friday:5};
-        const targetDay=dayIdx[schedDay]||2;
-        const [timeStr,ampm]=schedTime.split(" ");
-        const [hStr,mStr]=timeStr.split(":");
-        let hour=parseInt(hStr);
-        if(ampm==="PM"&&hour!==12) hour+=12;
-        if(ampm==="AM"&&hour===12) hour=0;
-        const target=new Date(now);
-        target.setDate(now.getDate()+((targetDay-now.getDay()+7)%7||7));
-        target.setHours(hour,parseInt(mStr),0,0);
-        const ms=target-now;
-        if(ms>0){
-          setTimeout(()=>{
-            new Notification("⚡ PostFlow AI Reminder",{body:"Time to post on LinkedIn! Your post is ready. 🚀",icon:"https://www.google.com/favicon.ico"});
-          },ms);
-          setReminderSet(true);
-          sm("sched","✅ Reminder set for "+schedDay+" at "+schedTime+". You'll get a browser notification!");
-        } else {
-          sm("sched","⚠️ That time has already passed this week. Pick a future day/time.");
-        }
-      } else {
-        sm("sched","⚠️ Notifications blocked. Enable them in browser settings to use reminders.");
-      }
+  /* ── FALLBACK ── */
+  state.step = "new";
+  await handleMessage(from, "hi", null);
+}
+
+/* ─── META WEBHOOK VERIFICATION ─── */
+app.get("/webhook", (req, res) => {
+  const mode      = req.query["hub.mode"];
+  const token     = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === META_VERIFY_TOKEN) {
+    console.log("✅ Webhook verified");
+    res.status(200).send(challenge);
+  } else {
+    console.error("❌ Webhook verification failed");
+    res.sendStatus(403);
+  }
+});
+
+/* ─── META WEBHOOK MESSAGE RECEIVER ─── */
+app.post("/webhook", async (req, res) => {
+  try {
+    const body = req.body;
+
+    /* Verify it's a WhatsApp message */
+    if (body.object !== "whatsapp_business_account") {
+      return res.sendStatus(404);
+    }
+
+    const entry   = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value   = changes?.value;
+    const messages = value?.messages;
+
+    if (!messages?.length) {
+      return res.sendStatus(200); /* No messages, just status update */
+    }
+
+    const msg  = messages[0];
+    const from = msg.from; /* Phone number with country code e.g. "919876543210" */
+
+    let messageBody = "";
+    let buttonId    = null;
+
+    if (msg.type === "text") {
+      messageBody = msg.text?.body || "";
+    } else if (msg.type === "interactive") {
+      /* Button reply */
+      buttonId    = msg.interactive?.button_reply?.id || "";
+      messageBody = msg.interactive?.button_reply?.title || "";
+    } else {
+      /* Unsupported message type */
+      await sendWhatsApp(from, "Please send a text message with your idea! 💬");
+      return res.sendStatus(200);
+    }
+
+    /* Respond to Meta immediately (required within 5s) */
+    res.sendStatus(200);
+
+    /* Process asynchronously */
+    await handleMessage(from, messageBody, buttonId);
+
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.sendStatus(500);
+  }
+});
+
+/* ─── REGISTRATION ENDPOINT ─── */
+app.post("/register", async (req, res) => {
+  const { name, phone } = req.body;
+  if (!name || !phone) return res.status(400).json({ error: "Name and phone required" });
+
+  let cleanPhone = phone.replace(/[\s\-\(\)]/g, "");
+  if (!cleanPhone.startsWith("+") && !cleanPhone.startsWith("91")) cleanPhone = "91" + cleanPhone;
+  cleanPhone = cleanPhone.replace("+", "");
+
+  try {
+    /* Save user state — they initiate conversation (keeps it user-initiated = free) */
+    userState[cleanPhone] = { step: "new", name: name };
+
+    const botNumber = process.env.META_DISPLAY_NUMBER || "Check Meta dashboard";
+    res.json({
+      success: true,
+      bot_number: botNumber,
+      instruction: `Hi ${name}! Open WhatsApp and send "hi" to ${botNumber} to start!`
+    });
+  } catch (err) {
+    console.error("Registration error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════
+   FREE TIER AI PROXY
+   Hides your Gemini key from the frontend.
+   Users don't need their own key — yours is used,
+   but rate-limited so no one can drain it.
+═══════════════════════════════════════════════════ */
+
+/* Rate limiter — tracks requests per IP */
+const rateLimiter = {};
+const RATE_LIMIT   = parseInt(process.env.RATE_LIMIT_PER_HOUR  || "20");  /* requests per IP per hour */
+const DAILY_LIMIT  = parseInt(process.env.RATE_LIMIT_PER_DAY   || "50");  /* requests per IP per day */
+
+function checkRateLimit(ip) {
+  const now   = Date.now();
+  const hour  = 60 * 60 * 1000;
+  const day   = 24 * hour;
+
+  if (!rateLimiter[ip]) {
+    rateLimiter[ip] = { hourRequests: [], dayRequests: [] };
+  }
+
+  const r = rateLimiter[ip];
+
+  /* Clean up old entries */
+  r.hourRequests = r.hourRequests.filter(t => now - t < hour);
+  r.dayRequests  = r.dayRequests.filter(t => now - t < day);
+
+  if (r.hourRequests.length >= RATE_LIMIT) {
+    const resetIn = Math.ceil((r.hourRequests[0] + hour - now) / 60000);
+    return { allowed: false, reason: `Hourly limit reached (${RATE_LIMIT}/hour). Resets in ${resetIn} min.` };
+  }
+  if (r.dayRequests.length >= DAILY_LIMIT) {
+    const resetIn = Math.ceil((r.dayRequests[0] + day - now) / 3600000);
+    return { allowed: false, reason: `Daily limit reached (${DAILY_LIMIT}/day). Resets in ${resetIn} hrs.` };
+  }
+
+  r.hourRequests.push(now);
+  r.dayRequests.push(now);
+  return { allowed: true };
+}
+
+/* Clean rate limiter memory every hour */
+setInterval(() => {
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  for (const ip of Object.keys(rateLimiter)) {
+    rateLimiter[ip].dayRequests = rateLimiter[ip].dayRequests.filter(t => now - t < day);
+    if (rateLimiter[ip].dayRequests.length === 0) delete rateLimiter[ip];
+  }
+}, 60 * 60 * 1000);
+
+/* ─── /api/ai  — Text generation proxy ─── */
+app.post("/api/ai", async (req, res) => {
+  /* CORS — allow your Vercel site only */
+  const origin = req.headers.origin || "";
+  const allowed = [
+    process.env.FRONTEND_URL || "https://postflow-ai-iota.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+  ];
+
+  /* Allow all origins in dev, restrict in prod */
+  const isAllowed = process.env.NODE_ENV !== "production" || allowed.some(a => origin.startsWith(a));
+  if (!isAllowed) return res.status(403).json({ error: "Origin not allowed" });
+
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  /* Rate limit by IP */
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "unknown";
+  const limit = checkRateLimit(ip);
+  if (!limit.allowed) {
+    return res.status(429).json({
+      error: limit.reason,
+      upgrade: "Get your free Gemini key at aistudio.google.com/app/apikey for unlimited use"
     });
   }
 
-  function copyPost(){navigator.clipboard.writeText(post+(htags?"\n\n"+htags:""));setCopied(true);setTimeout(()=>setCopied(false),2200);}
-  function reset(){setStep(1);setDomain("");setCustom("");setIdea("");setTopics([]);setPicked(null);setPost("");setHtags("");setPptSlides(null);setPptBlob(null);setImgSrc(null);setImgPrompt("");setImgSvc("");setMsgs({});setShowChange(false);setChange("");setSchedule(null);setCarouselText("");setReminderSet(false);setTab("post");}
+  const { prompt, simple } = req.body;
+  if (!prompt || typeof prompt !== "string" || prompt.length > 8000) {
+    return res.status(400).json({ error: "Invalid prompt" });
+  }
 
-  /* styles */
-  const cd={background:"#fff",borderRadius:20,padding:"22px 26px",boxShadow:"0 2px 16px rgba(0,0,0,.06)",marginBottom:16};
-  const bb={border:"none",borderRadius:50,fontWeight:600,cursor:"pointer",transition:"all .18s",fontSize:13,display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px",fontFamily:"'Inter',sans-serif",letterSpacing:"-.2px"};
-  const bP={...bb,background:"#2563EB",color:"#fff"};
-  const bO={...bb,background:"#fff",color:"#2563EB",border:"1.5px solid #2563EB"};
-  const bG={...bb,background:"#059669",color:"#fff"};
-  const bV={...bb,background:"#7C3AED",color:"#fff"};
-  const bA={...bb,background:"#D97706",color:"#fff"};
-  const bW={...bb,background:"#25D366",color:"#fff"};
-  const inp={padding:"11px 14px",border:"1.5px solid #E2E8F0",borderRadius:12,fontSize:13.5,outline:"none",width:"100%",color:"#0F172A",background:"#fff",fontFamily:"'Inter',sans-serif",transition:"border-color .2s"};
-  const ta={...inp,resize:"vertical",lineHeight:1.7};
+  try {
+    const text = await callGemini(prompt, simple === true);
+    res.json({ text });
+  } catch (err) {
+    console.error("AI proxy error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-  return <div style={{fontFamily:"'Inter',sans-serif",background:"#F8FAFC",minHeight:"100vh",paddingBottom:100}}>
-    <style>{`
-      .if:focus{border-color:#2563EB!important;box-shadow:0 0 0 3px rgba(37,99,235,.1)!important}
-      .tb{border:none;border-radius:50px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;font-size:13px;padding:8px 18px;transition:all .2s;letter-spacing:-.2px}
-      .ta{background:#2563EB;color:#fff;box-shadow:0 2px 8px rgba(37,99,235,.3)}
-      .ti{background:transparent;color:#64748B}.ti:hover{background:#F1F5F9;color:#0F172A}
-      .tc{border-radius:14px;padding:10px 14px;cursor:pointer;transition:all .2s;text-align:center}
-      .tc:hover{transform:translateY(-2px)}
-      .topic-c{border-radius:14px;padding:13px 16px;cursor:pointer;transition:all .2s;margin-bottom:10px}
-      .topic-c:hover{border-color:#2563EB!important;background:#EFF6FF!important}
-    `}</style>
+/* ─── /api/usage — Show current usage stats ─── */
+app.get("/api/usage", (req, res) => {
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const day  = 24 * hour;
+  const keys = getGeminiKeys();
+  const stats = {
+    total_ips_tracked: Object.keys(rateLimiter).length,
+    limits: { per_hour: RATE_LIMIT, per_day: DAILY_LIMIT },
+    active_users_last_hour: Object.values(rateLimiter)
+      .filter(r => r.hourRequests.some(t => now - t < hour)).length,
+    gemini_keys_loaded: keys.length,
+    key_rotation_index: keyIndex % (keys.length || 1)
+  };
+  res.json(stats);
+});
 
-    {/* TOP BAR */}
-    <div style={{background:"#060B18",padding:"12px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:50}}>
-      <div style={{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:18,color:"#fff",letterSpacing:"-1px"}}>PostFlow<span style={{color:"#38BDF8"}}> AI</span></div>
-      <div style={{display:"flex",gap:8,alignItems:"center"}}>
-        {step>=3&&<span style={{fontSize:11,color:"#475569",background:"rgba(255,255,255,.07)",padding:"4px 10px",borderRadius:10}}>{post.split(/\s+/).filter(Boolean).length}w</span>}
-        <button onClick={reset} style={{...bb,background:"transparent",border:"1px solid #1E293B",color:"#64748B",padding:"6px 14px",fontSize:11}}>🔄 New</button>
-        <button onClick={onHome} style={{...bb,background:"transparent",border:"1px solid #1E293B",color:"#64748B",padding:"6px 14px",fontSize:11}}>← Home</button>
-      </div>
-    </div>
+/* ─── HEALTH CHECK ─── */
+app.get("/", (req, res) => {
+  res.json({
+    status: "✅ PostFlow AI Bot running",
+    timestamp: new Date().toISOString(),
+    whatsapp_users: Object.keys(userState).length,
+    proxy: `AI proxy active — ${RATE_LIMIT} req/hour, ${DAILY_LIMIT} req/day per user`
+  });
+});
 
-    {/* PROGRESS */}
-    <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:"12px 0"}}>
-      <div style={{maxWidth:720,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center"}}>
-        {["Setup","Idea","Draft","Create"].map((s,i)=>{
-          const n=i+1,done=step>n,act=step===n;
-          return <React.Fragment key={s}>
-            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-              <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:11,background:done?"#2563EB":act?"#fff":"#F1F5F9",color:done?"#fff":act?"#2563EB":"#94A3B8",border:act?"2px solid #2563EB":"none",transition:"all .3s"}}>{done?"✓":n}</div>
-              <span style={{fontSize:10,color:act?"#2563EB":"#94A3B8",fontWeight:act?700:400,whiteSpace:"nowrap"}}>{s}</span>
-            </div>
-            {i<3&&<div style={{flex:1,height:2,background:step>n?"#2563EB":"#E2E8F0",margin:"0 6px",marginBottom:16,transition:"background .4s"}}/>}
-          </React.Fragment>;
-        })}
-      </div>
-    </div>
-
-    <div style={{maxWidth:720,margin:"20px auto 0",padding:"0 16px"}}>
-
-      {/* API KEY — optional now */}
-      <div style={cd}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
-          <div>
-            <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🔑 API Key <span style={{fontSize:12,fontWeight:500,color:"#10B981"}}>(Optional)</span></h2>
-            <p style={{margin:0,color:"#64748B",fontSize:13}}>Start free without a key. Add your own for unlimited use.</p>
-          </div>
-          {keySaved ? <Badge ch="✓ Your Key Active" col="#10B981"/> : <Badge ch="✓ Free Tier Active" col="#2563EB"/>}
-        </div>
-
-        {/* Free tier status */}
-        <div style={{marginTop:12,padding:"10px 14px",background:"#F0FDF4",borderRadius:12,border:"1px solid #BBF7D0",fontSize:13}}>
-          <div style={{fontWeight:600,color:"#15803D",marginBottom:3}}>✅ Free tier is ON — just start creating</div>
-          <div style={{color:"#64748B",fontSize:12}}>20 requests/hour · 50 requests/day · No key needed</div>
-        </div>
-
-        {/* Optional key input */}
-        <div style={{marginTop:12}}>
-          <div style={{fontSize:12,fontWeight:600,color:"#64748B",marginBottom:8}}>
-            Want unlimited? Add your free Gemini key:
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style={{color:"#2563EB",marginLeft:6}}>Get free key →</a>
-          </div>
-          <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
-            <div style={{flex:1,minWidth:200,position:"relative"}}>
-              <input className="if" type={showKey?"text":"password"} placeholder="AIza... (optional)" value={key}
-                onChange={e=>{setKey(e.target.value);setKeySaved(false);sm("key","");}} style={inp}/>
-              <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15}}>{showKey?"🙈":"👁️"}</button>
-            </div>
-            <button style={{...bO,opacity:!key.trim()?0.5:1}} onClick={saveKey}>Save Key</button>
-          </div>
-        </div>
-
-        {msgs.key&&<Msg type={msgs.key.startsWith("✅")?"success":"warn"} ch={msgs.key}/>}
-      </div>
-
-      {/* YOUR IDEA */}
-      <div style={cd}>
-        <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>💡 Your Rough Idea</h2>
-        <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Dump your rough thought here. Bullet notes, half-sentences, a draft — AI polishes it in <em>your</em> voice. Or skip and use topic picker below.</p>
-        <textarea className="if" value={idea} onChange={e=>setIdea(e.target.value)}
-          placeholder={"• 'I took 6 months off and learned more than 3 years at my job'\n• 'Cold outreach tip: got me 40% reply rate'\n• bullet notes you want expanded"}
-          style={{...ta,minHeight:96,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}/>
-        {idea.trim()&&<div style={{marginTop:12,display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
-          <button style={{...bA,opacity:busy.post?0.5:1}} onClick={draftFromIdea} disabled={busy.post}>
-            {busy.post?<><Spin/>Enhancing...</>:"✨ Turn Into LinkedIn Post"}
-          </button>
-          <span style={{fontSize:12,color:"#94A3B8"}}>or pick format + topic below</span>
-        </div>}
-        {msgs.idea&&<Msg type="warn" ch={msgs.idea}/>}
-      </div>
-
-      {/* POST FORMAT */}
-      <div style={cd}>
-        <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🎭 Post Format</h2>
-        <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Different format = different structure, prompt strategy, and viral mechanism</p>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:9}}>
-          {POST_TONES.map(t=><div key={t.id} className="tc" onClick={()=>setTone(t.id)} style={{border:"1.5px solid "+(tone===t.id?"#2563EB":"#E2E8F0"),background:tone===t.id?"#EFF6FF":"#FAFCFF"}}>
-            <div style={{fontSize:18,marginBottom:3}}>{t.label.split(" ")[0]}</div>
-            <div style={{fontWeight:600,fontSize:12,color:tone===t.id?"#2563EB":"#0F172A"}}>{t.label.slice(t.label.indexOf(" ")+1)}</div>
-            <div style={{fontSize:11,color:"#94A3B8",marginTop:2}}>{t.desc}</div>
-          </div>)}
-        </div>
-      </div>
-
-      {/* TOPIC GENERATOR */}
-      <div style={cd}>
-        <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🎯 Topic Generator</h2>
-        <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>AI generates 6 ideas with hook, angle, and reach prediction for your niche</p>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-          <div>
-            <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>Domain</label>
-            <select className="if" value={domain} onChange={e=>{setDomain(e.target.value);setTopics([]);setPicked(null);}} style={{...inp,cursor:"pointer"}}>
-              <option value="">— Choose niche —</option>
-              {DOMAINS.map(d=><option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>Custom Topic</label>
-            <input className="if" type="text" placeholder="e.g. My startup failed. Here's why." value={custom} onChange={e=>setCustom(e.target.value)} onKeyDown={e=>e.key==="Enter"&&useOwn()} style={inp}/>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
-          <button style={{...bP,opacity:(!domain&&!custom.trim())||busy.top?0.5:1}} onClick={getTopics} disabled={busy.top||(!domain&&!custom.trim())}>
-            {busy.top?<><Spin/>Finding ideas...</>:"🔥 Generate Topic Ideas"}
-          </button>
-          {custom.trim()&&<button style={bO} onClick={useOwn}>✍️ Use Directly</button>}
-        </div>
-        {msgs.top&&<Msg type="error" ch={msgs.top}/>}
-      </div>
-
-      {/* TOPIC LIST */}
-      {step>=2&&topics.length>0&&<div style={cd}>
-        <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🔥 AI Topic Ideas</h2>
-        <p style={{margin:"0 0 14px",color:"#64748B",fontSize:13}}>Each has a unique angle, exact hook line, and engagement prediction</p>
-        {topics.map((t,i)=><div key={i} className="topic-c" onClick={()=>pickTopic(t)} style={{border:"1.5px solid "+(picked===t?"#2563EB":"#E2E8F0"),background:picked===t?"#EFF6FF":"#FAFCFF"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-            <div style={{fontWeight:600,color:"#0F172A",fontSize:14,flex:1}}>{t.emoji} {t.title}</div>
-            <div style={{display:"flex",gap:6,flexShrink:0}}>
-              <Badge ch={t.reach==="viral"?"🚀 viral":t.reach==="high"?"🔥 high":"📈 "+t.reach} col={t.reach==="viral"?"#EF4444":t.reach==="high"?"#F59E0B":"#10B981"}/>
-              {picked===t&&<span style={{color:"#2563EB",fontSize:16}}>✓</span>}
-            </div>
-          </div>
-          <div style={{fontSize:12,color:"#1D4ED8",marginTop:6,fontWeight:500,background:"#EFF6FF",padding:"5px 10px",borderRadius:8,display:"inline-block"}}>"{t.hook}"</div>
-          <div style={{display:"flex",gap:10,marginTop:8,flexWrap:"wrap"}}>
-            <span style={{fontSize:12,color:"#64748B"}}>📈 {t.why}</span>
-            {t.angle&&<span style={{fontSize:12,color:"#7C3AED"}}>🎯 {t.angle}</span>}
-          </div>
-        </div>)}
-        {picked&&<button style={{...bP,marginTop:8,opacity:busy.post?0.5:1}} onClick={()=>draftPost(false)} disabled={busy.post}>
-          {busy.post?<><Spin/>Drafting...</>:"✍️ Draft This Post →"}
-        </button>}
-        {msgs.post&&<Msg type="error" ch={msgs.post}/>}
-      </div>}
-
-      {step>=2&&picked&&topics.length===0&&!post&&<div style={cd}>
-        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <div style={{flex:1}}>
-            <div style={{fontWeight:600,fontSize:15}}>{picked.emoji} {picked.title}</div>
-            <div style={{fontSize:13,color:"#64748B",marginTop:3}}>Format: <strong style={{color:"#7C3AED"}}>{POST_TONES.find(t=>t.id===tone)?.label}</strong></div>
-          </div>
-          <button style={{...bP,opacity:busy.post?0.5:1}} onClick={()=>draftPost(false)} disabled={busy.post}>
-            {busy.post?<><Spin/>Drafting...</>:"✍️ Draft My Post →"}
-          </button>
-        </div>
-        {msgs.post&&<Msg type="error" ch={msgs.post}/>}
-      </div>}
-
-      {/* ── STEP 3: TABS ── */}
-      {step>=3&&<>
-        <div style={{background:"#fff",borderRadius:20,padding:"14px 16px",marginBottom:16,boxShadow:"0 2px 16px rgba(0,0,0,.06)"}}>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {[{id:"post",l:"✍️ Post"},{id:"ppt",l:"📊 Carousel PPT"},{id:"image",l:"🎨 AI Image"},{id:"schedule",l:"📅 Schedule"},{id:"whatsapp",l:"💬 WhatsApp"}].map(t=>
-              <button key={t.id} className={"tb "+(tab===t.id?"ta":"ti")} onClick={()=>setTab(t.id)}>{t.l}</button>
-            )}
-          </div>
-        </div>
-
-        {/* POST TAB */}
-        {tab==="post"&&<div style={cd}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
-            <div>
-              <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>✍️ Your LinkedIn Post</h2>
-              <p style={{margin:0,fontSize:13,color:"#64748B"}}>Format: <strong style={{color:"#7C3AED"}}>{POST_TONES.find(t=>t.id===tone)?.label}</strong> · Edit freely</p>
-            </div>
-            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              <button style={bO} onClick={copyPost}>{copied?"✅ Copied!":"📋 Copy + Tags"}</button>
-              <a href="https://www.linkedin.com/feed/" target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}><button style={bP}>Open LinkedIn →</button></a>
-            </div>
-          </div>
-          <textarea value={post} onChange={e=>setPost(e.target.value)} className="if" style={{...ta,minHeight:240}}/>
-          {htags&&<div style={{marginTop:10,padding:"10px 14px",background:"#EFF6FF",borderRadius:12,fontSize:13,color:"#1D4ED8",fontWeight:500}}>{htags}</div>}
-          <div style={{marginTop:8,fontSize:12,display:"flex",gap:16}}>
-            <span style={{color:"#94A3B8"}}>{post.split(/\s+/).filter(Boolean).length} words</span>
-            <span style={{color:post.split(/\s+/).filter(Boolean).length>230?"#EF4444":"#10B981"}}>{post.split(/\s+/).filter(Boolean).length>230?"⚠️ Too long (aim for ≤220)":"✓ Good length"}</span>
-          </div>
-          {/* AI Refine */}
-          <div style={{marginTop:20,borderTop:"1px solid #F1F5F9",paddingTop:18}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <div><div style={{fontWeight:600,fontSize:14,color:"#0F172A"}}>🤖 Ask AI to Change Anything</div><div style={{fontSize:12,color:"#64748B",marginTop:2}}>Tell AI exactly what you want different</div></div>
-              <button onClick={()=>setShowChange(p=>!p)} style={{...bO,padding:"6px 14px",fontSize:12}}>{showChange?"▲ Hide":"✏️ Change"}</button>
-            </div>
-            {showChange&&<div>
-              <textarea value={change} onChange={e=>setChange(e.target.value)} className="if" placeholder={"• Make hook more punchy\n• Add personal story\n• Shorten by 50 words\n• More casual voice\n• Insert a stat"} style={{...ta,minHeight:76,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}/>
-              <div style={{display:"flex",gap:9,marginTop:10}}>
-                <button style={{...bA,opacity:(!change.trim()||busy.post)?0.5:1}} onClick={()=>draftPost(true)} disabled={!change.trim()||busy.post}>{busy.post?<><Spin/>Rewriting...</>:"✨ Apply"}</button>
-                <button style={{...bO,padding:"10px 16px"}} onClick={()=>{setShowChange(false);setChange("");}}>Cancel</button>
-              </div>
-            </div>}
-          </div>
-          <div style={{marginTop:16,borderTop:"1px solid #F1F5F9",paddingTop:14}}>
-            <div style={{fontWeight:600,fontSize:12,color:"#94A3B8",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>Quick changes:</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {["Punchier hook","Add vulnerability","Insert a stat","Shorter CTA","More casual","Add specific example"].map(s=>
-                <button key={s} onClick={()=>{setChange(s);setShowChange(true);}} style={{...bb,background:"#F1F5F9",color:"#334155",border:"1px solid #E2E8F0",padding:"6px 13px",fontSize:12}}>{s}</button>
-              )}
-            </div>
-          </div>
-        </div>}
-
-        {/* PPT TAB */}
-        {tab==="ppt"&&<div style={cd}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
-            <div>
-              <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>📊 AI Carousel PPT</h2>
-              <p style={{margin:0,fontSize:13,color:"#64748B"}}>Dynamic slide count · 5 different layouts · 6 themes · copy carousel text</p>
-            </div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {!pptBlob
-                ?<button style={{...bO,opacity:busy.ppt?0.5:1}} onClick={genPPT} disabled={busy.ppt}>{busy.ppt?<><Spin c="#2563EB"/>Building...</>:"⚡ Generate Carousel"}</button>
-                :<>
-                  <button style={{...bO,opacity:busy.ppt?0.5:1}} onClick={genPPT} disabled={busy.ppt}>↺ Redo</button>
-                  {carouselText&&<button style={{...bO}} onClick={copyCarousel}>{copiedCarousel?"✅ Copied!":"📋 Copy Slides"}</button>}
-                  <button style={bG} onClick={dlPPT}>⬇ Download .pptx</button>
-                </>
-              }
-            </div>
-          </div>
-
-          {/* Slide count */}
-          <div style={{marginBottom:14}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#64748B",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>📏 Slide Count: {slideCount} slides</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {[5,6,7,8,9,10].map(n=><button key={n} onClick={()=>setSlideCount(n)} style={{...bb,background:slideCount===n?"#2563EB":"#F1F5F9",color:slideCount===n?"#fff":"#334155",padding:"6px 14px",fontSize:13,border:slideCount===n?"none":"1px solid #E2E8F0"}}>{n}</button>)}
-            </div>
-            <p style={{margin:"8px 0 0",fontSize:12,color:"#94A3B8"}}>Content adapts to slide count. 7 is recommended for most topics.</p>
-          </div>
-
-          {/* Theme picker */}
-          <div style={{marginBottom:16}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#64748B",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>🎨 Theme:</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-              {PPT_THEMES.map(th=><div key={th.id} className="tc" onClick={()=>setPptTheme(th.id)} style={{border:"2px solid "+(pptTheme===th.id?"#2563EB":"#E2E8F0"),background:pptTheme===th.id?"#EFF6FF":"#FAFCFF"}}>
-                <div style={{fontSize:16,marginBottom:2}}>{th.label.split(" ")[0]}</div>
-                <div style={{fontWeight:600,fontSize:12,color:pptTheme===th.id?"#2563EB":"#0F172A"}}>{th.label.slice(th.label.indexOf(" ")+1)}</div>
-              </div>)}
-            </div>
-          </div>
-
-          {msgs.ppt&&<Msg type={msgs.ppt.startsWith("✅")?"success":msgs.ppt.startsWith("❌")?"error":"warn"} ch={msgs.ppt}/>}
-
-          {pptSlides&&<div style={{marginTop:14,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))",gap:10}}>
-            {pptSlides.map((s,i)=>{
-              const C=(PPT_THEMES.find(x=>x.id===pptTheme)||PPT_THEMES[0]).c;
-              const isT=i===0,isL=i===pptSlides.length-1;
-              const li={cover:"📌",stat:"📊",tip:"💡",quote:"💬",list:"📋",highlight:"⭐",cta:"🎯"}[s.layout]||"📊";
-              return <div key={i} style={{border:"1px solid #E2E8F0",borderRadius:12,overflow:"hidden",background:isT||isL?"#"+C.bg:"#fff"}}>
-                <div style={{background:"#"+C.acc,height:4}}/>
-                <div style={{padding:"10px 12px"}}>
-                  <div style={{fontSize:9,color:isT||isL?"#"+C.acc:"#"+C.brd,fontWeight:800,marginBottom:4,textTransform:"uppercase"}}>{li} {s.layout?.toUpperCase()}</div>
-                  <div style={{fontWeight:700,fontSize:11,color:isT||isL?"#F0F4FF":"#0F172A",lineHeight:1.3,marginBottom:4}}>{s.heading}</div>
-                  <div style={{fontSize:10,color:"#94A3B8"}}>{(s.body||s.quote||"").slice(0,55)}{(s.body||s.quote||"").length>55?"…":""}</div>
-                  {s.stat&&<div style={{marginTop:5,fontSize:14,fontWeight:900,color:"#"+C.acc}}>{s.stat}</div>}
-                </div>
-              </div>;
-            })}
-          </div>}
-
-          {carouselText&&<div style={{marginTop:14}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#64748B",marginBottom:8}}>📋 Carousel Text (copy to paste as captions):</div>
-            <textarea readOnly value={carouselText} style={{...ta,minHeight:120,background:"#F8FAFC",fontSize:12,color:"#334155"}}/>
-          </div>}
-        </div>}
-
-        {/* IMAGE TAB */}
-        {tab==="image"&&<div style={cd}>
-          <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>🎨 AI Cover Image</h2>
-          <p style={{margin:"0 0 16px",fontSize:13,color:"#64748B"}}>100% AI generated via Puter.js — free, no API key needed, multiple models.</p>
-
-          {/* Puter.js info banner */}
-          <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:12,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#1D4ED8"}}>
-            ✅ <strong>100% Free via Puter.js</strong> — No API key needed. Uses GPT Image, FLUX, DALL-E 3, Stable Diffusion. First time you generate, Puter may ask you to sign up (free, takes 10 seconds).
-          </div>
-
-          {/* Model picker */}
-          <div style={{marginBottom:16}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#64748B",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>🤖 Choose AI Model:</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-              {PUTER_MODELS.map(m=><div key={m.id} onClick={()=>setImgMode(m.id)}
-                style={{padding:"10px 14px",border:"2px solid "+(imgMode===m.id?"#2563EB":"#E2E8F0"),borderRadius:13,cursor:"pointer",background:imgMode===m.id?"#EFF6FF":"#FAFCFF",transition:"all .2s"}}>
-                <div style={{fontWeight:600,fontSize:13,color:imgMode===m.id?"#2563EB":"#0F172A"}}>{m.label}</div>
-                <div style={{fontSize:11,color:"#64748B",marginTop:2}}>{m.desc}</div>
-              </div>)}
-            </div>
-          </div>
-
-          <div style={{marginBottom:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5}}>Image Prompt</label>
-              <button style={{...bO,fontSize:11,padding:"5px 12px",opacity:busy.imgP?0.5:1}} onClick={autoImgPrompt} disabled={busy.imgP}>{busy.imgP?<><Spin c="#2563EB"/>Writing...</>:"✨ AI Auto-Write"}</button>
-            </div>
-            <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} className="if"
-              placeholder="e.g. 'Dark navy background, glowing neural network nodes, electric blue light rays, cinematic depth of field, no text, ultra HD 4K'"
-              style={{...ta,minHeight:80,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}/>
-            <p style={{margin:"6px 0 0",fontSize:11,color:"#94A3B8"}}>💡 More specific = better. Include: lighting style, mood, colors, no text/watermark</p>
-          </div>
-
-          <button style={{...bV,fontSize:14,padding:"12px 28px",opacity:!imgPrompt.trim()||busy.img?0.5:1}} onClick={genImg} disabled={!imgPrompt.trim()||busy.img}>
-            {busy.img?<><Spin/>Generating with AI...</>:"🎨 Generate AI Image (Free)"}
-          </button>
-
-          {msgs.img&&<Msg type={msgs.img.startsWith("✅")?"success":msgs.img.startsWith("❌")?"error":"warn"} ch={msgs.img}/>}
-
-          {imgSrc&&<div style={{marginTop:18,animation:"up .3s ease"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-              <span style={{fontSize:12,color:"#64748B"}}>Generated by: <strong style={{color:"#2563EB"}}>{imgSvc}</strong></span>
-              <div style={{display:"flex",gap:8}}>
-                <button style={{...bO,fontSize:12,padding:"6px 14px",opacity:busy.img?0.5:1}} onClick={genImg} disabled={busy.img}>🔄 Regenerate</button>
-                <button style={{...bG,fontSize:12,padding:"6px 14px"}} onClick={()=>{const a=document.createElement("a");a.href=imgSrc;a.download="linkedin-cover.png";a.click();}}>⬇ Save PNG</button>
-              </div>
-            </div>
-            <img src={imgSrc} alt="AI cover" style={{width:"100%",borderRadius:16,border:"1px solid #E2E8F0",display:"block",boxShadow:"0 4px 24px rgba(0,0,0,.1)"}}/>
-            <p style={{margin:"10px 0 0",fontSize:11,color:"#94A3B8"}}>💡 Download and attach to your LinkedIn post — images get 2-3x more reach</p>
-          </div>}
-        </div>}
-
-        {/* SCHEDULE TAB */}
-        {tab==="schedule"&&<div style={cd}>
-          <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>📅 Smart Post Scheduler</h2>
-          <p style={{margin:"0 0 16px",fontSize:13,color:"#64748B"}}>AI picks best day + time for your topic. Set a browser notification reminder.</p>
-
-          <button style={{...bP,marginBottom:16,opacity:busy.sched?0.5:1}} onClick={getSched} disabled={busy.sched}>
-            {busy.sched?<><Spin/>Analysing...</>:"🔍 Find Best Posting Time"}
-          </button>
-
-          {msgs.sched&&<Msg type={msgs.sched.startsWith("✅")?"success":msgs.sched.startsWith("❌")?"error":"warn"} ch={msgs.sched}/>}
-
-          {schedule&&<div style={{animation:"up .3s ease",marginBottom:16}}>
-            <div style={{background:"linear-gradient(135deg,#EFF6FF,#F0FDF4)",borderRadius:16,padding:20,marginBottom:14,border:"1px solid #BFDBFE"}}>
-              <div style={{fontSize:11,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>🏆 Recommended</div>
-              <div style={{fontSize:26,fontWeight:800,color:"#0F172A",fontFamily:"'Syne',sans-serif"}}>{schedule.best_time}</div>
-              <div style={{fontSize:13,color:"#2563EB",marginTop:6}}>{schedule.why}</div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:14}}>
-              {(schedule.slots||[]).map((slot,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:i===0?"#EFF6FF":"#F8FAFC",borderRadius:12,border:"1px solid "+(i===0?"#BFDBFE":"#E2E8F0")}}>
-                <div style={{width:44,height:44,borderRadius:12,background:i===0?"#2563EB":"#E2E8F0",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  <span style={{fontSize:13,fontWeight:800,color:i===0?"#fff":"#64748B"}}>{slot.score}%</span>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:14,color:"#0F172A"}}>{slot.day} at {slot.time}</div>
-                  <div style={{fontSize:12,color:"#64748B",marginTop:2}}>{slot.reason}</div>
-                </div>
-                {i===0&&<Badge ch="Best" col="#10B981"/>}
-              </div>)}
-            </div>
-            {schedule.avoid&&<Msg type="warn" ch={"⚠️ Avoid: "+schedule.avoid}/>}
-          </div>}
-
-          {/* Reminder */}
-          <div style={{borderTop:"1px solid #F1F5F9",paddingTop:18,marginTop:6}}>
-            <div style={{fontWeight:700,fontSize:15,color:"#0F172A",marginBottom:4}}>🔔 Set Browser Notification Reminder</div>
-            <p style={{fontSize:13,color:"#64748B",marginBottom:14}}>Pick your day + time. Your browser will send you a notification reminder to post — even if you close this tab (works on Chrome, Edge, Firefox).</p>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-              <div>
-                <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Day</label>
-                <select className="if" value={schedDay} onChange={e=>setSchedDay(e.target.value)} style={{...inp,cursor:"pointer"}}>
-                  {SCHED_DAYS.map(d=><option key={d} value={d}>{d}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Time</label>
-                <select className="if" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={{...inp,cursor:"pointer"}}>
-                  {SCHED_TIMES.map(t=><option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-            </div>
-            <button style={{...bP,opacity:reminderSet?0.6:1}} onClick={setReminder}>
-              {reminderSet?"✅ Reminder Set! Browser will notify you":"🔔 Set Reminder for "+schedDay+" at "+schedTime}
-            </button>
-            <div style={{marginTop:10,fontSize:12,color:"#94A3B8"}}>Note: Keep the browser open for notifications to fire. For phone reminders, add to calendar manually.</div>
-
-            {/* Calendar links */}
-            <div style={{marginTop:14,padding:"14px 16px",background:"#F0FDF4",borderRadius:12,border:"1px solid #BBF7D0"}}>
-              <div style={{fontWeight:600,fontSize:13,color:"#15803D",marginBottom:8}}>📆 Add to Calendar (manual)</div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <a href={`https://calendar.google.com/calendar/r/eventedit?text=Post+on+LinkedIn+(PostFlow+AI)&details=Your+LinkedIn+post+is+ready!+Open+PostFlow+AI+and+copy+it.`} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>
-                  <button style={{...bb,background:"#4285F4",color:"#fff",padding:"8px 16px",fontSize:12}}>📅 Google Calendar</button>
-                </a>
-                <a href="https://www.linkedin.com/feed/" target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>
-                  <button style={{...bP,padding:"8px 16px",fontSize:12}}>Post on LinkedIn now →</button>
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>}
-
-        {/* WHATSAPP TAB */}
-        {tab==="whatsapp"&&<div style={cd}>
-          <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>💬 WhatsApp Bot</h2>
-          <p style={{margin:"0 0 20px",fontSize:13,color:"#64748B"}}>Get LinkedIn post drafts sent directly to your WhatsApp — anytime you have an idea.</p>
-
-          {/* How it works */}
-          <div style={{background:"linear-gradient(135deg,#F0FDF4,#EFF6FF)",borderRadius:16,padding:20,marginBottom:20,border:"1px solid #BBF7D0"}}>
-            <div style={{fontWeight:700,fontSize:14,color:"#15803D",marginBottom:12}}>✅ How it works:</div>
-            <div style={{display:"grid",gap:10}}>
-              {[
-                {n:"1",ic:"📝",t:"Register below",d:"Enter your WhatsApp number — takes 10 seconds"},
-                {n:"2",ic:"💬",t:"Get a welcome message",d:"Our bot messages you on WhatsApp immediately"},
-                {n:"3",ic:"💡",t:"Text any idea",d:"Send your rough thought anytime — day or night"},
-                {n:"4",ic:"⚡",t:"Get your post",d:"Receive polished LinkedIn post + hashtags in seconds"},
-              ].map(s=><div key={s.n} style={{display:"flex",gap:12,alignItems:"center"}}>
-                <div style={{width:32,height:32,borderRadius:10,background:"#25D366",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{s.ic}</div>
-                <div><div style={{fontWeight:600,fontSize:13,color:"#0F172A"}}>{s.t}</div><div style={{fontSize:12,color:"#64748B"}}>{s.d}</div></div>
-              </div>)}
-            </div>
-          </div>
-
-          {/* Registration form */}
-          <div style={{background:"#F8FAFC",borderRadius:16,padding:20,border:"1px solid #E2E8F0",marginBottom:16}}>
-            <div style={{fontWeight:700,fontSize:15,color:"#0F172A",marginBottom:14}}>📲 Register your WhatsApp number</div>
-            <div style={{marginBottom:10}}>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>Your Name</label>
-              <input className="if" type="text" placeholder="Anurag" id="wa_name" style={inp}/>
-            </div>
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>WhatsApp Number (India +91)</label>
-              <input className="if" type="tel" placeholder="98765 43210" id="wa_phone" maxLength={10} style={inp}/>
-              <div style={{fontSize:11,color:"#94A3B8",marginTop:4}}>10 digits only, no country code</div>
-            </div>
-            <button style={{...bW,width:"100%",justifyContent:"center",padding:"13px"}}
-              onClick={async()=>{
-                const name=document.getElementById("wa_name").value.trim();
-                const phone=document.getElementById("wa_phone").value.trim().replace(/\s/g,"");
-                if(!name||phone.length!==10){sm("wa","⚠️ Enter your name and 10-digit number");return;}
-                sb("wa",true);sm("wa","");
-                try{
-                  const r=await fetch(PROXY_URL+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone:"91"+phone})});
-                  const d=await r.json();
-                  if(d.success) sm("wa","✅ Registered! Now open WhatsApp and send \"hi\" to: " + (d.bot_number||"the number from your Meta dashboard") + " 👆 You initiate first so it stays free!");
-                  else sm("wa","❌ "+d.error);
-                }catch(e){sm("wa","❌ Could not connect. Try again.");}
-                sb("wa",false);
-              }}>
-              {busy.wa?<><Spin/>Sending...</>:"💬 Send Me the WhatsApp Bot"}
-            </button>
-            {msgs.wa&&<Msg type={msgs.wa.startsWith("✅")?"success":msgs.wa.startsWith("⚠️")?"warn":"error"} ch={msgs.wa}/>}
-          </div>
-
-          {/* What you can say */}
-          <div style={{borderRadius:14,padding:16,background:"#060E09",border:"1px solid rgba(37,211,102,.2)"}}>
-            <div style={{fontWeight:600,fontSize:13,color:"#25D366",marginBottom:10}}>💬 Try texting these:</div>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {[
-                '"hi" — start and pick a format',
-                '"I want to post about cold outreach tips that got me 40% reply rate"',
-                '"story post about my startup failure"',
-                '"list post: 5 things I wish I knew before joining a startup"',
-              ].map(s=><div key={s} style={{background:"rgba(255,255,255,.05)",borderRadius:10,padding:"9px 12px",fontSize:12,color:"#94A3B8"}}>
-                {s}
-              </div>)}
-            </div>
-          </div>
-        </div>}
-
-        {/* WhatsApp promo card */}
-        {tab!=="whatsapp"&&<div style={{...cd,background:"#060E09",border:"1px solid rgba(37,211,102,.2)"}}>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-            <div style={{fontSize:26}}>💬</div>
-            <div><div style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:14,color:"#A7F3D0"}}>WhatsApp Bot — Coming Soon</div><div style={{fontSize:12,color:"#4B7C5F",marginTop:1}}>Text idea → get post + PPT instantly</div></div>
-            <button onClick={()=>setTab("whatsapp")} style={{...bb,marginLeft:"auto",background:"#25D366",color:"#fff",padding:"7px 14px",fontSize:12}}>How it works →</button>
-          </div>
-        </div>}
-
-        <div style={{textAlign:"center",marginTop:4,marginBottom:20}}>
-          <button style={bO} onClick={reset}>🔄 Start a New Post</button>
-        </div>
-      </>}
-    </div>
-  </div>;
-}
-
-function App(){const [v,setV]=useState("landing");return v==="landing"?<Landing onLaunch={()=>setV("tool")}/>:<Tool onHome={()=>setV("landing")}/>;}
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
-</script>
-</body>
-</html>
+/* ─── START ─── */
+app.listen(PORT, () => {
+  console.log(`⚡ PostFlow AI Bot running on port ${PORT}`);
+  console.log(`📱 Webhook URL: https://YOUR-RAILWAY-URL.railway.app/webhook`);
+});
