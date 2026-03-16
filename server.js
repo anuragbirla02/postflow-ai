@@ -16,6 +16,52 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+/* ─── CORS — allow your frontend on all routes ─── */
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "";
+  const allowed = [
+    process.env.FRONTEND_URL || "https://postflow-ai-iota.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://postflow-ai-iota.vercel.app",
+  ];
+  if (!origin || allowed.some(a => origin.startsWith(a)) || process.env.NODE_ENV !== "production") {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+
+/* ─── MULTIPLE GEMINI KEY ROTATION ───
+   Add as many free keys as you want in Railway:
+   GEMINI_KEY_1=AIza...
+   GEMINI_KEY_2=AIza...
+   GEMINI_KEY_3=AIza...
+   etc. They rotate round-robin so no single key gets rate limited.
+*/
+function getGeminiKeys() {
+  const keys = [];
+  /* Primary key */
+  if (process.env.GEMINI_KEY) keys.push(process.env.GEMINI_KEY);
+  /* Additional keys GEMINI_KEY_1 through GEMINI_KEY_20 */
+  for (let i = 1; i <= 20; i++) {
+    const k = process.env[`GEMINI_KEY_${i}`];
+    if (k) keys.push(k);
+  }
+  return keys;
+}
+
+let keyIndex = 0;
+function getNextKey() {
+  const keys = getGeminiKeys();
+  if (keys.length === 0) throw new Error("No Gemini API keys configured");
+  const key = keys[keyIndex % keys.length];
+  keyIndex++;
+  return key;
+}
+
 /* ─── ENV VARIABLES (set in Railway dashboard) ─── */
 const {
   META_VERIFY_TOKEN,   // any string you choose e.g. "postflow2024"
@@ -30,22 +76,35 @@ const {
 const userState = {};
 /* Structure: { "+91XXXXXXXXXX": { step: "idle|waiting_tone|waiting_idea", tone: "story", name: "" } } */
 
-/* ─── GEMINI AI ─── */
-async function callGemini(prompt) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85, topP: 0.95 }
-      })
+async function callGemini(prompt, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const key = getNextKey();
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.85, topP: 0.95 }
+          })
+        }
+      );
+      const d = await res.json();
+      /* If rate limited, try next key */
+      if (d.error?.status === "RESOURCE_EXHAUSTED" || d.error?.code === 429) {
+        console.warn(`Key rate limited, trying next key (attempt ${attempt + 1})`);
+        continue;
+      }
+      if (d.error) throw new Error(d.error.message);
+      return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    } catch(e) {
+      if (attempt === retries - 1) throw e;
+      console.warn(`Attempt ${attempt + 1} failed: ${e.message}`);
     }
-  );
-  const d = await res.json();
-  if (d.error) throw new Error(d.error.message);
-  return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  }
+  throw new Error("All API keys exhausted or rate limited. Try again in a minute.");
 }
 
 /* ─── META WHATSAPP SEND MESSAGE ─── */
@@ -521,24 +580,19 @@ app.post("/api/ai", async (req, res) => {
   }
 });
 
-/* ─── CORS preflight for /api/ai ─── */
-app.options("/api/ai", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin",  req.headers.origin || "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.sendStatus(200);
-});
-
-/* ─── /api/usage — Show current usage stats (optional debug) ─── */
+/* ─── /api/usage — Show current usage stats ─── */
 app.get("/api/usage", (req, res) => {
   const now = Date.now();
   const hour = 60 * 60 * 1000;
   const day  = 24 * hour;
+  const keys = getGeminiKeys();
   const stats = {
     total_ips_tracked: Object.keys(rateLimiter).length,
     limits: { per_hour: RATE_LIMIT, per_day: DAILY_LIMIT },
     active_users_last_hour: Object.values(rateLimiter)
-      .filter(r => r.hourRequests.some(t => now - t < hour)).length
+      .filter(r => r.hourRequests.some(t => now - t < hour)).length,
+    gemini_keys_loaded: keys.length,
+    key_rotation_index: keyIndex % (keys.length || 1)
   };
   res.json(stats);
 });
