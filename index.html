@@ -48,7 +48,8 @@ const SCHED_TIMES=["7:30 AM","8:00 AM","9:00 AM","10:00 AM","12:00 PM","1:00 PM"
    YOUR Railway server URL — change this after deploying tonight
    Users with no Gemini key will use your free proxy (rate limited)
    Users who add their own key bypass the proxy completely           */
-const PROXY_URL = "https://postflow-ai-production.up.railway.app/"; /* ← update after deploy */
+const PROXY_URL = "https://postflow-ai-production.up.railway.app";
+const PRESENTON_URL = "https://presenton-production-77c4.up.railway.app";
 
 async function aiText(prompt, key) {
   /* If user has their own key — call Gemini directly, no proxy needed */
@@ -499,29 +500,101 @@ function Tool({onHome}){
   }
 
   async function genPPT(){
-    if(!window.PptxGenJS){sm("ppt","❌ PPT library not loaded. Refresh.");return;}
-    sb("ppt",true);sm("ppt","🤖 AI writing "+slideCount+" slides...");
+    sb("ppt",true); sm("ppt","🤖 Presenton AI designing your slides...");
     try{
-      const topic=picked?.title||idea.slice(0,60)||"LinkedIn Insights";
-      const r=await aiText(pptPrompt(topic,post,tone,slideCount),key);
-      const parsed=parseJSON(r);
-      if(!parsed?.slides||parsed.slides.length<3){sm("ppt","⚠️ Couldn't parse slides. Retry.");sb("ppt",false);return;}
+      const topic = picked?.title || idea.slice(0,60) || "LinkedIn Insights";
+
+      /* Step 1 — Ask Gemini to write the slide content */
+      sm("ppt","✍️ AI writing slide content...");
+      const contentPrompt = `Create a ${slideCount}-slide LinkedIn carousel about: "${topic}"
+${post ? `Based on this post:\n"${post.slice(0,400)}"` : ""}
+
+Write compelling slide content. Return ONLY valid JSON:
+{
+  "title": "catchy title max 8 words",
+  "slides": [
+    {"heading": "slide title", "content": "2-3 sentences of insight", "type": "title"},
+    {"heading": "slide title", "content": "key insight 2-3 sentences", "stat": "XX%", "type": "stat"},
+    {"heading": "slide title", "content": "actionable advice 2-3 sentences", "type": "tip"},
+    {"heading": "slide title", "content": "memorable principle 2-3 sentences", "quote": "short quotable phrase", "type": "quote"},
+    {"heading": "slide title", "content": "numbered insight 2-3 sentences", "type": "list", "items": ["point 1", "point 2", "point 3"]},
+    {"heading": "final takeaway", "content": "call to action 2-3 sentences", "type": "cta"}
+  ]
+}`;
+      const raw = await aiText(contentPrompt, key);
+      const parsed = parseJSON(raw);
+      if(!parsed?.slides){ sm("ppt","⚠️ Could not parse slides. Retry."); sb("ppt",false); return; }
       setPptSlides(parsed.slides);
+
+      /* Step 2 — Send to Presenton to design the actual PPT */
+      sm("ppt","🎨 Presenton designing beautiful slides...");
+
+      /* Build the Presenton prompt from our content */
+      const slideDescriptions = parsed.slides.map((s,i) =>
+        `Slide ${i+1}: ${s.heading}. ${s.content}${s.stat?" Key stat: "+s.stat:""}${s.quote?" Quote: "+s.quote:""}${s.items?" Points: "+s.items.join(", "):""}`
+      ).join("\n");
+
+      const presentonPrompt = `LinkedIn carousel presentation about: ${topic}
+
+${slideDescriptions}
+
+Style: Modern, professional, LinkedIn-ready. Bold typography, clean layout, high contrast. Each slide should be visually distinct.`;
+
+      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: presentonPrompt,
+          slide_count: slideCount,
+        })
+      });
+
+      if(!presentonRes.ok){
+        /* Presenton failed — fall back to download link */
+        throw new Error("Presenton returned " + presentonRes.status);
+      }
+
+      const presentonData = await presentonRes.json();
+
+      /* Presenton returns a file path or download URL */
+      const pptUrl = presentonData.download_url || presentonData.url || presentonData.file;
+
+      if(pptUrl){
+        /* Store the URL for download */
+        setPptBlob(pptUrl);
+        sm("ppt","✅ Beautiful slides ready! Click Download.");
+      } else {
+        throw new Error("No download URL from Presenton");
+      }
+
       /* Build carousel text for copy */
-      const ctxt=parsed.slides.map((s,i)=>{
-        if(s.layout==="cover") return `SLIDE 1 — ${s.heading}\n${s.subheading||""}`;
-        if(s.layout==="cta")   return `SLIDE ${i+1} — CTA\n${s.heading}\n${s.body||""}`;
-        const items=s.items?s.items.map((it,ii)=>`  ${ii+1}. ${it}`).join("\n"):"";
-        return `SLIDE ${i+1} — ${(s.label||"").toUpperCase()}\n${s.heading}\n${s.body||s.quote||""}\n${items}${s.stat?"\n📊 "+s.stat+" — "+s.statLabel:""}${s.tip?"\n💡 "+s.tip:""}${s.takeaway?"\n★ "+s.takeaway:""}`;
-      }).join("\n\n---\n\n");
+      const ctxt = parsed.slides.map((s,i) =>
+        `SLIDE ${i+1}\n${s.heading}\n${s.content}${s.stat?"\n📊 "+s.stat:""}${s.items?"\n"+s.items.map((it,ii)=>`${ii+1}. ${it}`).join("\n"):""}`
+      ).join("\n\n---\n\n");
       setCarouselText(ctxt);
-      sm("ppt","📊 Rendering "+pptTheme+" theme...");
-      const blob=await buildPPT(parsed.slides,parsed.title||topic,pptTheme);
-      setPptBlob(blob);sm("ppt","✅ Done! Download or copy carousel text.");
-    }catch(e){sm("ppt","❌ "+e.message);}
+
+    }catch(e){
+      sm("ppt","❌ "+e.message);
+      console.error("PPT error:", e);
+    }
     sb("ppt",false);
   }
-  function dlPPT(){if(!pptBlob)return;const url=URL.createObjectURL(pptBlob);const a=document.createElement("a");a.href=url;a.download=((picked?.title||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";a.click();URL.revokeObjectURL(url);}
+
+  function dlPPT(){
+    if(!pptBlob) return;
+    /* pptBlob is now a URL string from Presenton */
+    if(typeof pptBlob === "string" && pptBlob.startsWith("http")){
+      window.open(pptBlob, "_blank");
+    } else if(pptBlob instanceof Blob){
+      /* fallback blob */
+      const url = URL.createObjectURL(pptBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = ((picked?.title||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  }
 
   function copyCarousel(){navigator.clipboard.writeText(carouselText);setCopiedCarousel(true);setTimeout(()=>setCopiedCarousel(false),2500);}
 
@@ -1009,62 +1082,69 @@ function Tool({onHome}){
 
         {/* WHATSAPP TAB */}
         {tab==="whatsapp"&&<div style={cd}>
-          <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>💬 WhatsApp Integration</h2>
-          <p style={{margin:"0 0 20px",fontSize:13,color:"#64748B"}}>Text your idea to a WhatsApp number → get your post + PPT link back in chat. Here's exactly how it works and what you need to do.</p>
+          <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>💬 WhatsApp Bot</h2>
+          <p style={{margin:"0 0 20px",fontSize:13,color:"#64748B"}}>Get LinkedIn post drafts sent directly to your WhatsApp — anytime you have an idea.</p>
 
-          {/* Flow */}
-          <div style={{display:"grid",gap:10,marginBottom:24}}>
-            {[
-              {n:"1",ic:"🌐",title:"Register on PostFlow AI",desc:"User visits postflowai.com → enters name + WhatsApp number → gets registered",status:"Your site (already built)"},
-              {n:"2",ic:"💬",title:"Automated welcome message",desc:"As soon as they register, your server sends them a WhatsApp message from your business number",status:"Needs Twilio ($15 free trial)"},
-              {n:"3",ic:"💡",title:"User texts an idea",desc:"'Hey I want to write about cold outreach tips' → sent to your server",status:"Twilio webhook"},
-              {n:"4",ic:"🤖",title:"AI processes it",desc:"Your Node.js server calls Gemini API → generates post + PPT → uploads to a temp URL",status:"Node.js on Railway (free)"},
-              {n:"5",ic:"📤",title:"Reply with content",desc:"User gets back: post text + PPT download link + 3 hashtags",status:"Twilio sends reply"},
-            ].map(step=><div key={step.n} style={{display:"flex",gap:14,padding:"14px 16px",background:"#F8FAFC",borderRadius:14,border:"1px solid #E2E8F0"}}>
-              <div style={{width:36,height:36,borderRadius:10,background:"#2563EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{step.ic}</div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:14,color:"#0F172A",marginBottom:2}}>{step.title}</div>
-                <div style={{fontSize:12,color:"#64748B",marginBottom:4}}>{step.desc}</div>
-                <Badge ch={step.status} col="#7C3AED"/>
-              </div>
-            </div>)}
-          </div>
-
-          {/* What YOU need to do */}
-          <div style={{background:"#060B18",borderRadius:16,padding:22,marginBottom:16}}>
-            <div style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:15,color:"#38BDF8",marginBottom:14}}>✅ Steps YOU need to take:</div>
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {/* How it works */}
+          <div style={{background:"linear-gradient(135deg,#F0FDF4,#EFF6FF)",borderRadius:16,padding:20,marginBottom:20,border:"1px solid #BBF7D0"}}>
+            <div style={{fontWeight:700,fontSize:14,color:"#15803D",marginBottom:12}}>✅ How it works:</div>
+            <div style={{display:"grid",gap:10}}>
               {[
-                {n:"1",title:"Sign up for Twilio",desc:"Go to twilio.com → free account → get $15 trial credit → buy a WhatsApp-enabled number (~$1/month)",link:"https://www.twilio.com",linkText:"twilio.com →"},
-                {n:"2",title:"Enable WhatsApp Sandbox (for testing)",desc:"Twilio Console → Messaging → Try WhatsApp → follow steps to connect your personal number to the sandbox. Free.",link:"https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn",linkText:"Open Twilio Console →"},
-                {n:"3",title:"Deploy the backend",desc:"I'll give you a server.js file. Push to GitHub → go to railway.app → connect repo → deploy. Free $5/month tier.",link:"https://railway.app",linkText:"railway.app →"},
-                {n:"4",title:"Set webhook URL in Twilio",desc:"After deploying, copy your Railway URL → paste in Twilio WhatsApp sandbox 'When a message comes in' field.",link:"","linkText":""},
-                {n:"5",title:"Add env variables",desc:"In Railway: add TWILIO_SID, TWILIO_TOKEN, TWILIO_NUMBER, GEMINI_KEY. That's it.",link:"","linkText":""},
-              ].map(s=><div key={s.n} style={{display:"flex",gap:12,padding:"12px 14px",background:"rgba(255,255,255,.04)",borderRadius:10}}>
-                <div style={{width:26,height:26,borderRadius:"50%",background:"#2563EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,color:"#fff",flexShrink:0}}>{s.n}</div>
-                <div>
-                  <div style={{fontWeight:700,fontSize:13,color:"#E2E8F0",marginBottom:3}}>{s.title}</div>
-                  <div style={{fontSize:12,color:"#64748B",marginBottom:s.link?6:0}}>{s.desc}</div>
-                  {s.link&&<a href={s.link} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"#38BDF8",textDecoration:"none"}}>{s.linkText}</a>}
-                </div>
+                {n:"1",ic:"📝",t:"Register below",d:"Enter your WhatsApp number — takes 10 seconds"},
+                {n:"2",ic:"💬",t:"Get a welcome message",d:"Our bot messages you on WhatsApp immediately"},
+                {n:"3",ic:"💡",t:"Text any idea",d:"Send your rough thought anytime — day or night"},
+                {n:"4",ic:"⚡",t:"Get your post",d:"Receive polished LinkedIn post + hashtags in seconds"},
+              ].map(s=><div key={s.n} style={{display:"flex",gap:12,alignItems:"center"}}>
+                <div style={{width:32,height:32,borderRadius:10,background:"#25D366",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{s.ic}</div>
+                <div><div style={{fontWeight:600,fontSize:13,color:"#0F172A"}}>{s.t}</div><div style={{fontSize:12,color:"#64748B"}}>{s.d}</div></div>
               </div>)}
             </div>
           </div>
 
-          {/* Cost breakdown */}
-          <div style={{background:"#F0FDF4",borderRadius:14,padding:18,border:"1px solid #BBF7D0"}}>
-            <div style={{fontWeight:700,fontSize:14,color:"#15803D",marginBottom:10}}>💰 Monthly Cost Estimate</div>
-            <div style={{display:"grid",gap:6}}>
-              {[["Twilio WhatsApp number","~$1/month"],["Twilio messages (1000/mo)","~$0.005 each = $5/mo"],["Railway backend","Free ($5 credit/mo)"],["Gemini API","Free tier (generous)"],["Total for 1000 users/mo","~$6-10/month"]].map(([item,cost])=>
-                <div key={item} style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#166534"}}>
-                  <span>{item}</span><strong>{cost}</strong>
-                </div>
-              )}
+          {/* Registration form */}
+          <div style={{background:"#F8FAFC",borderRadius:16,padding:20,border:"1px solid #E2E8F0",marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:15,color:"#0F172A",marginBottom:14}}>📲 Register your WhatsApp number</div>
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>Your Name</label>
+              <input className="if" type="text" placeholder="Anurag" id="wa_name" style={inp}/>
             </div>
+            <div style={{marginBottom:14}}>
+              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>WhatsApp Number (India +91)</label>
+              <input className="if" type="tel" placeholder="98765 43210" id="wa_phone" maxLength={10} style={inp}/>
+              <div style={{fontSize:11,color:"#94A3B8",marginTop:4}}>10 digits only, no country code</div>
+            </div>
+            <button style={{...bW,width:"100%",justifyContent:"center",padding:"13px"}}
+              onClick={async()=>{
+                const name=document.getElementById("wa_name").value.trim();
+                const phone=document.getElementById("wa_phone").value.trim().replace(/\s/g,"");
+                if(!name||phone.length!==10){sm("wa","⚠️ Enter your name and 10-digit number");return;}
+                sb("wa",true);sm("wa","");
+                try{
+                  const r=await fetch(PROXY_URL+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone:"91"+phone})});
+                  const d=await r.json();
+                  if(d.success) sm("wa","✅ Done! Check WhatsApp — you should have a message from us!");
+                  else sm("wa","❌ "+d.error);
+                }catch(e){sm("wa","❌ Could not connect. Try again.");}
+                sb("wa",false);
+              }}>
+              {busy.wa?<><Spin/>Sending...</>:"💬 Send Me the WhatsApp Bot"}
+            </button>
+            {msgs.wa&&<Msg type={msgs.wa.startsWith("✅")?"success":msgs.wa.startsWith("⚠️")?"warn":"error"} ch={msgs.wa}/>}
           </div>
 
-          <div style={{marginTop:16,padding:"14px 16px",background:"#EFF6FF",borderRadius:12,border:"1px solid #BFDBFE",fontSize:13,color:"#1D4ED8"}}>
-            💡 <strong>Want the server.js code?</strong> Just ask me "build the WhatsApp server" and I'll give you the complete Node.js file ready to deploy on Railway.
+          {/* What you can say */}
+          <div style={{borderRadius:14,padding:16,background:"#060E09",border:"1px solid rgba(37,211,102,.2)"}}>
+            <div style={{fontWeight:600,fontSize:13,color:"#25D366",marginBottom:10}}>💬 Try texting these:</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {[
+                '"hi" — start and pick a format',
+                '"I want to post about cold outreach tips that got me 40% reply rate"',
+                '"story post about my startup failure"',
+                '"list post: 5 things I wish I knew before joining a startup"',
+              ].map(s=><div key={s} style={{background:"rgba(255,255,255,.05)",borderRadius:10,padding:"9px 12px",fontSize:12,color:"#94A3B8"}}>
+                {s}
+              </div>)}
+            </div>
           </div>
         </div>}
 
