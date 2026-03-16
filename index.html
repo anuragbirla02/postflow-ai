@@ -55,7 +55,7 @@ async function aiText(prompt, key) {
   /* If user has their own key — call Gemini directly, no proxy needed */
   if (key && key.trim().length > 10) {
     const r = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + key,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + key,
       { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.9,topP:0.95} }) }
     );
@@ -65,13 +65,10 @@ async function aiText(prompt, key) {
   }
 
   /* No key — use your free proxy */
-  if (!PROXY_URL || PROXY_URL.includes("YOUR-RAILWAY")) {
-    throw new Error("Free tier not set up yet. Please add your Gemini key above (free at aistudio.google.com/app/apikey)");
-  }
   const r = await fetch(PROXY_URL + "/api/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt })
+    body: JSON.stringify({ prompt, simple: false })
   });
   const d = await r.json();
   if (!r.ok) {
@@ -484,7 +481,7 @@ function Tool({onHome}){
       } else {
         const topic=picked?.title||idea.slice(0,80)||"LinkedIn content";
         p=await aiText(postPrompt(topic,tone,idea,picked?.angle||"authentic"),key);
-        if(!htags){const h=await aiText(`LinkedIn hashtags for: "${topic}". Return ONLY 5 hashtags separated by spaces.`,key);setHtags(h.trim());}
+        if(!htags){const h=await aiText(`LinkedIn hashtags for: "${topic}". Return ONLY 5 hashtags separated by spaces.`,key,true);setHtags(h.trim());}
         if(!imgPrompt) setImgPrompt(imgAutoPrompt(topic,tone));
       }
       setPost(p);setStep(3);setShowChange(false);setChange("");setTab("post");
@@ -599,8 +596,36 @@ Write compelling slide content. Return ONLY valid JSON:
 
   async function autoImgPrompt(){
     sb("imgP",true);
-    try{const topic=picked?.title||idea.slice(0,60)||"professional content";const p=await aiText(`Create a detailed image generation prompt for LinkedIn post about: "${topic}". Tone: ${tone}. Requirements: NO text, NO words, NO watermark, 16:9 landscape, ultra HD, professional, cinematic. Specify: lighting, colors, mood, composition in 2-3 sentences. Return ONLY the prompt.`,key);setImgPrompt(p.trim());}
-    catch(e){sm("img","❌ Prompt failed: "+e.message);}
+    try{
+      const topic = picked?.title || idea.slice(0,60) || "professional content";
+      const toneVisuals = {
+        story:    "warm cinematic scene, golden hour light, 35mm film look, shallow depth of field, one person silhouette or empty meaningful space",
+        insight:  "bold abstract composition, dramatic side lighting, dark background, sharp geometric shapes, electric color accent",
+        list:     "clean minimal flat lay, soft overhead diffused light, white or light grey background, organized objects, editorial magazine style",
+        question: "two contrasting worlds split composition, dramatic lighting divide, thought-provoking visual tension",
+        data:     "dark navy background, glowing data network nodes, electric blue light trails, futuristic tech aesthetic, depth and dimension",
+        mistake:  "lone figure at turning point, moody chiaroscuro lighting, fog or mist, cinematic widescreen, contemplative atmosphere"
+      };
+      const visual = toneVisuals[tone] || toneVisuals.story;
+      const p = await aiText(
+        `You are a professional art director creating LinkedIn cover images.
+
+Topic: "${topic}"
+Visual style needed: ${visual}
+
+Write a detailed image generation prompt (3-4 sentences) that:
+1. Describes the EXACT visual scene, not the topic
+2. Specifies lighting (e.g. "soft side lighting from left", "dramatic chiaroscuro")
+3. Specifies color palette (e.g. "deep navy #0A0F1E with electric cyan accents")
+4. Specifies camera/composition (e.g. "wide angle, rule of thirds, shallow DOF")
+5. Ends with: "No text, no words, no watermark, ultra HD 4K, 16:9 landscape, professional photography"
+
+Return ONLY the prompt. No explanation. No quotes.`,
+        key, true
+      );
+      setImgPrompt(p.trim());
+    }
+    catch(e){ sm("img","❌ Prompt failed: "+e.message); }
     sb("imgP",false);
   }
 
@@ -621,7 +646,7 @@ Write compelling slide content. Return ONLY valid JSON:
 
   async function getSched(){
     sb("sched",true);sm("sched","");
-    try{const topic=picked?.title||idea.slice(0,60)||"post";const r=await aiText(schedPrompt(topic,domain),key);const p=parseJSON(r);if(p?.slots){setSchedule(p);sm("sched","✅ Best times found!");}else sm("sched","⚠️ Could not parse. Try again.");}
+    try{const topic=picked?.title||idea.slice(0,60)||"post";const r=await aiText(schedPrompt(topic,domain),key,true);const p=parseJSON(r);if(p?.slots){setSchedule(p);sm("sched","✅ Best times found!");}else sm("sched","⚠️ Could not parse. Try again.");}
     catch(e){sm("sched","❌ "+e.message);}
     sb("sched",false);
   }
