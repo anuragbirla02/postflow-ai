@@ -48,7 +48,7 @@ const SCHED_TIMES=["7:30 AM","8:00 AM","9:00 AM","10:00 AM","12:00 PM","1:00 PM"
    YOUR Railway server URL — change this after deploying tonight
    Users with no Gemini key will use your free proxy (rate limited)
    Users who add their own key bypass the proxy completely           */
-const PROXY_URL = "https://YOUR-RAILWAY-URL.railway.app"; /* ← update after deploy */
+const PROXY_URL = "https://postflow-ai-production.up.railway.app/"; /* ← update after deploy */
 
 async function aiText(prompt, key) {
   /* If user has their own key — call Gemini directly, no proxy needed */
