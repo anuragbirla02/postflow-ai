@@ -55,7 +55,7 @@ async function aiText(prompt, key) {
   /* If user has their own key — call Gemini directly, no proxy needed */
   if (key && key.trim().length > 10) {
     const r = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + key,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + key,
       { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.9,topP:0.95} }) }
     );
@@ -1146,7 +1146,7 @@ Return ONLY the prompt. No explanation. No quotes.`,
                 try{
                   const r=await fetch(PROXY_URL+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone:"91"+phone})});
                   const d=await r.json();
-                  if(d.success) sm("wa","✅ Done! Check WhatsApp — you should have a message from us!");
+                  if(d.success) sm("wa","✅ Registered! Now open WhatsApp and send \"hi\" to: " + (d.bot_number||"the number from your Meta dashboard") + " 👆 You initiate first so it stays free!");
                   else sm("wa","❌ "+d.error);
                 }catch(e){sm("wa","❌ Could not connect. Try again.");}
                 sb("wa",false);
