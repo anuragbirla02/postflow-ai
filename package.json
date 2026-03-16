@@ -1,0 +1,15 @@
+{
+  "name": "postflow-ai-whatsapp",
+  "version": "1.0.0",
+  "description": "PostFlow AI — WhatsApp Bot + AI Proxy",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
