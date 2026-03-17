@@ -50,6 +50,17 @@ const SCHED_TIMES=["7:30 AM","8:00 AM","9:00 AM","10:00 AM","12:00 PM","1:00 PM"
    Users who add their own key bypass the proxy completely           */
 const PROXY_URL = "https://postflow-ai-production.up.railway.app";
 const PRESENTON_URL = "https://presenton-production-77c4.up.railway.app";
+/* ─── YOUR WHATSAPP BOT NUMBER ───
+   Get this from Meta → WhatsApp → API Setup → "Phone Number"
+   Format: country code + number, no + or spaces
+   Example India: 919876543210  */
+/* ── YOUR WHATSAPP NUMBER ──
+   This is the number users will text to reach your bot.
+   Get it from: Meta Dashboard → WhatsApp → API Setup → Phone Number
+   Format: country code + number, no + or spaces
+   Example India: "917038540385"
+*/
+const WHATSAPP_NUMBER = "917038540385"; /* ← update with your actual Meta phone number */
 
 async function aiText(prompt, key) {
   /* If user has their own key — call Gemini directly, no proxy needed */
@@ -1107,77 +1118,100 @@ Return ONLY the prompt. No explanation. No quotes.`,
         {/* WHATSAPP TAB */}
         {tab==="whatsapp"&&<div style={cd}>
           <h2 style={{margin:"0 0 4px",fontSize:17,color:"#0F172A",fontFamily:"'Syne',sans-serif",fontWeight:700}}>💬 WhatsApp Bot</h2>
-          <p style={{margin:"0 0 20px",fontSize:13,color:"#64748B"}}>Get LinkedIn post drafts sent directly to your WhatsApp — anytime you have an idea.</p>
+          <p style={{margin:"0 0 20px",fontSize:13,color:"#64748B"}}>Text your rough idea to our WhatsApp bot — get a polished LinkedIn post back in seconds.</p>
+
+          {/* Big CTA — direct chat button */}
+          <a href={"https://wa.me/"+WHATSAPP_NUMBER+"?text=hi"}
+            target="_blank" rel="noopener noreferrer" style={{textDecoration:"none",display:"block",marginBottom:20}}>
+            <div style={{background:"#25D366",borderRadius:16,padding:"20px 24px",display:"flex",alignItems:"center",gap:16,cursor:"pointer",transition:"all .2s",boxShadow:"0 4px 20px rgba(37,211,102,.3)"}}>
+              <div style={{fontSize:40}}>💬</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:800,fontSize:17,color:"#fff",fontFamily:"'Syne',sans-serif"}}>Start Chatting Now</div>
+                <div style={{fontSize:13,color:"rgba(255,255,255,.8)",marginTop:3}}>Tap to open WhatsApp → send "hi" → get your post</div>
+              </div>
+              <div style={{fontSize:24,color:"#fff"}}>→</div>
+            </div>
+          </a>
 
           {/* How it works */}
-          <div style={{background:"linear-gradient(135deg,#F0FDF4,#EFF6FF)",borderRadius:16,padding:20,marginBottom:20,border:"1px solid #BBF7D0"}}>
-            <div style={{fontWeight:700,fontSize:14,color:"#15803D",marginBottom:12}}>✅ How it works:</div>
+          <div style={{background:"#F0FDF4",borderRadius:14,padding:18,marginBottom:16,border:"1px solid #BBF7D0"}}>
+            <div style={{fontWeight:700,fontSize:13,color:"#15803D",marginBottom:12,textTransform:"uppercase",letterSpacing:.5}}>How it works:</div>
             <div style={{display:"grid",gap:10}}>
               {[
-                {n:"1",ic:"📝",t:"Register below",d:"Enter your WhatsApp number — takes 10 seconds"},
-                {n:"2",ic:"💬",t:"Get a welcome message",d:"Our bot messages you on WhatsApp immediately"},
-                {n:"3",ic:"💡",t:"Text any idea",d:"Send your rough thought anytime — day or night"},
-                {n:"4",ic:"⚡",t:"Get your post",d:"Receive polished LinkedIn post + hashtags in seconds"},
-              ].map(s=><div key={s.n} style={{display:"flex",gap:12,alignItems:"center"}}>
-                <div style={{width:32,height:32,borderRadius:10,background:"#25D366",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{s.ic}</div>
-                <div><div style={{fontWeight:600,fontSize:13,color:"#0F172A"}}>{s.t}</div><div style={{fontSize:12,color:"#64748B"}}>{s.d}</div></div>
+                ["1️⃣","Tap the green button above","Opens WhatsApp with our bot number ready"],
+                ["2️⃣","Send: hi","Bot replies with format options"],
+                ["3️⃣","Pick a format & share your idea","Story, Hot Take, List, Mistake"],
+                ["4️⃣","Get your post in ~10 seconds","Polished LinkedIn post + hashtags"],
+              ].map(([n,t,d])=><div key={t} style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <span style={{fontSize:18,flexShrink:0}}>{n}</span>
+                <div><div style={{fontWeight:600,fontSize:13,color:"#0F172A"}}>{t}</div><div style={{fontSize:12,color:"#64748B",marginTop:1}}>{d}</div></div>
               </div>)}
             </div>
           </div>
 
-          {/* Registration form */}
-          <div style={{background:"#F8FAFC",borderRadius:16,padding:20,border:"1px solid #E2E8F0",marginBottom:16}}>
-            <div style={{fontWeight:700,fontSize:15,color:"#0F172A",marginBottom:14}}>📲 Register your WhatsApp number</div>
-            <div style={{marginBottom:10}}>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>Your Name</label>
-              <input className="if" type="text" placeholder="Anurag" id="wa_name" style={inp}/>
-            </div>
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:.5}}>WhatsApp Number (India +91)</label>
-              <input className="if" type="tel" placeholder="98765 43210" id="wa_phone" maxLength={10} style={inp}/>
-              <div style={{fontSize:11,color:"#94A3B8",marginTop:4}}>10 digits only, no country code</div>
-            </div>
-            <button style={{...bW,width:"100%",justifyContent:"center",padding:"13px"}}
-              onClick={async()=>{
-                const name=document.getElementById("wa_name").value.trim();
-                const phone=document.getElementById("wa_phone").value.trim().replace(/\s/g,"");
-                if(!name||phone.length!==10){sm("wa","⚠️ Enter your name and 10-digit number");return;}
-                sb("wa",true);sm("wa","");
-                try{
-                  const r=await fetch(PROXY_URL+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone:"91"+phone})});
-                  const d=await r.json();
-                  if(d.success) sm("wa","✅ Registered! Now open WhatsApp and send \"hi\" to: " + (d.bot_number||"the number from your Meta dashboard") + " 👆 You initiate first so it stays free!");
-                  else sm("wa","❌ "+d.error);
-                }catch(e){sm("wa","❌ Could not connect. Try again.");}
-                sb("wa",false);
-              }}>
-              {busy.wa?<><Spin/>Sending...</>:"💬 Send Me the WhatsApp Bot"}
-            </button>
-            {msgs.wa&&<Msg type={msgs.wa.startsWith("✅")?"success":msgs.wa.startsWith("⚠️")?"warn":"error"} ch={msgs.wa}/>}
-          </div>
-
-          {/* What you can say */}
-          <div style={{borderRadius:14,padding:16,background:"#060E09",border:"1px solid rgba(37,211,102,.2)"}}>
-            <div style={{fontWeight:600,fontSize:13,color:"#25D366",marginBottom:10}}>💬 Try texting these:</div>
+          {/* Try these examples */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:13,color:"#0F172A",marginBottom:10}}>💡 Try sending these messages:</div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {[
-                '"hi" — start and pick a format',
-                '"I want to post about cold outreach tips that got me 40% reply rate"',
-                '"story post about my startup failure"',
-                '"list post: 5 things I wish I knew before joining a startup"',
-              ].map(s=><div key={s} style={{background:"rgba(255,255,255,.05)",borderRadius:10,padding:"9px 12px",fontSize:12,color:"#94A3B8"}}>
-                {s}
+                {msg:"hi",desc:"Start fresh and pick a post format"},
+                {msg:"I grew my LinkedIn to 5k in 90 days",desc:"Bot turns it into a Story post"},
+                {msg:"list post about cold outreach tips",desc:"Specify format + topic directly"},
+                {msg:"My startup failed. Here's what I learned.",desc:"Auto-detects Mistake format"},
+              ].map(ex=><div key={ex.msg} style={{background:"#F8FAFC",borderRadius:12,padding:"10px 14px",border:"1px solid #E2E8F0"}}>
+                <div style={{fontWeight:600,fontSize:13,color:"#1D4ED8",marginBottom:2}}>"{ex.msg}"</div>
+                <div style={{fontSize:12,color:"#64748B"}}>{ex.desc}</div>
               </div>)}
             </div>
+          </div>
+
+          {/* Register form — optional, just saves name */}
+          <div style={{background:"#F8FAFC",borderRadius:14,padding:18,border:"1px solid #E2E8F0"}}>
+            <div style={{fontWeight:700,fontSize:14,color:"#0F172A",marginBottom:4}}>📋 Register (Optional)</div>
+            <div style={{fontSize:12,color:"#64748B",marginBottom:14}}>Register so the bot knows your name. Not required — you can just text hi directly.</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+              <div>
+                <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>Name</label>
+                <input className="if" type="text" placeholder="Anurag" id="wa_name" style={inp}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,fontWeight:700,color:"#64748B",display:"block",marginBottom:5,textTransform:"uppercase"}}>WhatsApp (+91)</label>
+                <input className="if" type="tel" placeholder="9876543210" id="wa_phone" maxLength={10} style={inp}/>
+              </div>
+            </div>
+            <button style={{...bW,opacity:busy.wa?0.6:1}} onClick={async()=>{
+              const name=document.getElementById("wa_name").value.trim();
+              const phone=document.getElementById("wa_phone").value.trim().replace(/\s/g,"");
+              if(!name||phone.length!==10){sm("wa","⚠️ Enter name and 10-digit number");return;}
+              sb("wa",true);sm("wa","");
+              try{
+                const r=await fetch(PROXY_URL+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone:"91"+phone})});
+                const d=await r.json();
+                if(d.success) sm("wa","✅ Registered "+name+"! Now tap the green button above to start chatting →");
+                else sm("wa","❌ "+d.error);
+              }catch(e){sm("wa","❌ Server error. You can still chat — just tap the green button above!");}
+              sb("wa",false);
+            }}>
+              {busy.wa?<><Spin/>Saving...</>:"💾 Save My Name"}
+            </button>
+            {msgs.wa&&<Msg type={msgs.wa.startsWith("✅")?"success":msgs.wa.startsWith("⚠️")?"warn":"error"} ch={msgs.wa}/>}
           </div>
         </div>}
 
         {/* WhatsApp promo card */}
         {tab!=="whatsapp"&&<div style={{...cd,background:"#060E09",border:"1px solid rgba(37,211,102,.2)"}}>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
             <div style={{fontSize:26}}>💬</div>
-            <div><div style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:14,color:"#A7F3D0"}}>WhatsApp Bot — Coming Soon</div><div style={{fontSize:12,color:"#4B7C5F",marginTop:1}}>Text idea → get post + PPT instantly</div></div>
-            <button onClick={()=>setTab("whatsapp")} style={{...bb,marginLeft:"auto",background:"#25D366",color:"#fff",padding:"7px 14px",fontSize:12}}>How it works →</button>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:14,color:"#A7F3D0"}}>WhatsApp Bot — Live Now</div>
+              <div style={{fontSize:12,color:"#4B7C5F",marginTop:1}}>Text your idea → get post in seconds</div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
+            <a href={"https://wa.me/"+WHATSAPP_NUMBER+"?text=hi"} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>
+              <button style={{...bW,fontSize:13}}>💬 Chat on WhatsApp</button>
+            </a>
+            <button onClick={()=>setTab("whatsapp")} style={{...bb,background:"transparent",border:"1px solid rgba(37,211,102,.3)",color:"#25D366",fontSize:12}}>How it works →</button>
           </div>
         </div>}
 
