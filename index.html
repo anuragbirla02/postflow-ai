@@ -60,7 +60,10 @@ const PRESENTON_URL = "https://presenton-production-77c4.up.railway.app";
    Format: country code + number, no + or spaces
    Example India: "917038540385"
 */
-const WHATSAPP_NUMBER = "917038540385"; /* ← update with your actual Meta phone number */
+/* ⚠️ UPDATE THIS: Go to Meta → WhatsApp → API Setup → copy the phone number shown there
+   It looks like +91XXXXXXXXXX — enter it WITHOUT the + sign
+   This is your META BUSINESS number, NOT your personal number */
+const WHATSAPP_NUMBER = "917038540385"; /* ← REPLACE with number from Meta dashboard */
 
 async function aiText(prompt, key) {
   /* If user has their own key — call Gemini directly, no proxy needed */
@@ -537,42 +540,40 @@ Write compelling slide content. Return ONLY valid JSON:
       /* Build slide descriptions for Presenton prompt */
       const slideDescriptions = parsed.slides.map((s,i) =>
         `Slide ${i+1}: ${s.heading}. ${s.content}${s.stat?" Key stat: "+s.stat:""}${s.quote?" Quote: "+s.quote:""}${s.items?" Points: "+s.items.join(", "):""}`
-      ).join(" | ");
+      ).join(". ");
 
-      /* Step 2 — Send to Presenton with correct endpoint + FormData */
-      sm("ppt","🎨 Presenton designing beautiful slides...");
+      /* Step 2 — Presenton API (correct endpoint + JSON body) */
+      sm("ppt","🎨 Presenton AI designing your slides...");
 
-      const formData = new FormData();
-      formData.append("prompt", `Professional LinkedIn carousel about: ${topic}. ${slideDescriptions}. Style: modern, clean, professional. Bold typography.`);
-      formData.append("n_slides", String(slideCount));
-      formData.append("theme", "general");
-      formData.append("export_as", "pptx");
-
-      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/generate/presentation", {
+      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/presentation/generate", {
         method: "POST",
-        body: formData
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `LinkedIn carousel about: ${topic}. ${slideDescriptions}`,
+          n_slides: slideCount,
+          language: "English",
+          template: "professional",
+          export_as: "pptx",
+          tone: "professional",
+          density: "standard"
+        })
       });
 
       if(!presentonRes.ok){
         const errText = await presentonRes.text();
-        throw new Error("Presenton error " + presentonRes.status + ": " + errText.slice(0,100));
+        throw new Error("Presenton error " + presentonRes.status + ": " + errText.slice(0,150));
       }
 
       const presentonData = await presentonRes.json();
-      console.log("Presenton response:", JSON.stringify(presentonData).slice(0,200));
+      console.log("Presenton response:", JSON.stringify(presentonData).slice(0,300));
 
-      /* Presenton returns presentation_id and path */
-      const pptUrl = presentonData.path ||
-                     presentonData.download_url ||
-                     presentonData.url ||
-                     (presentonData.presentation_id ? PRESENTON_URL + "/api/v1/ppt/export/presentation?presentation_id=" + presentonData.presentation_id + "&export_as=pptx" : null);
+      /* Response has path field — prepend server URL to get download link */
+      const rawPath = presentonData.path || presentonData.download_url || presentonData.url;
+      if(!rawPath) throw new Error("Presenton gave no file path. Response: " + JSON.stringify(presentonData).slice(0,100));
 
-      if(pptUrl){
-        setPptBlob(pptUrl.startsWith("http") ? pptUrl : PRESENTON_URL + pptUrl);
-        sm("ppt","✅ Beautiful Presenton slides ready! Click Download.");
-      } else {
-        throw new Error("No download URL in Presenton response: " + JSON.stringify(presentonData).slice(0,100));
-      }
+      const pptUrl = rawPath.startsWith("http") ? rawPath : PRESENTON_URL + rawPath;
+      setPptBlob(pptUrl);
+      sm("ppt","✅ AI slides ready! Click Download to open.");
 
       /* Build carousel text for copy */
       const ctxt = parsed.slides.map((s,i) =>
