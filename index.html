@@ -58,7 +58,7 @@ const PRESENTON_URL = "https://presenton-production-77c4.up.railway.app";
    This is the number users will text to reach your bot.
    Get it from: Meta Dashboard → WhatsApp → API Setup → Phone Number
    Format: country code + number, no + or spaces
-   Example India: "917038540385"
+   Example India: "919145678232"
 */
 /* ⚠️ UPDATE THIS: Go to Meta → WhatsApp → API Setup → copy the phone number shown there
    It looks like +91XXXXXXXXXX — enter it WITHOUT the + sign
@@ -393,7 +393,11 @@ function Landing({onLaunch}){
       <p style={{fontSize:17,color:"#94A3B8",lineHeight:1.7,marginBottom:38,maxWidth:520,margin:"0 auto 38px"}}>Not an AI-post factory. A tool that takes YOUR rough idea and packages it into posts, carousels, and AI images — in your voice.</p>
       <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
         <button className="lcta" onClick={onLaunch}>Start Creating Free →</button>
-        <button className="lsec" onClick={onLaunch}>See features ↓</button>
+        <a href={"https://wa.me/"+WHATSAPP_NUMBER+"?text=hi"} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>
+          <button style={{background:"#25D366",color:"#fff",border:"none",padding:"15px 32px",borderRadius:50,fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",gap:8}}>
+            💬 Try on WhatsApp
+          </button>
+        </a>
       </div>
       <div style={{marginTop:14,fontSize:12,color:"#475569"}}>No credit card · Free Gemini key · Your ideas stay yours</div>
     </div>
@@ -542,20 +546,22 @@ Write compelling slide content. Return ONLY valid JSON:
         `Slide ${i+1}: ${s.heading}. ${s.content}${s.stat?" Key stat: "+s.stat:""}${s.quote?" Quote: "+s.quote:""}${s.items?" Points: "+s.items.join(", "):""}`
       ).join(". ");
 
-      /* Step 2 — Presenton API (correct endpoint + JSON body) */
+      /* Step 2 — Presenton API */
       sm("ppt","🎨 Presenton AI designing your slides...");
+
+      /* Presenton needs the Google API key to call Gemini for generation */
+      const gkey = key && key.trim().length > 10 ? key.trim() : "";
 
       const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/presentation/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: `LinkedIn carousel about: ${topic}. ${slideDescriptions}`,
+          content: `LinkedIn carousel presentation about: ${topic}. ${slideDescriptions}`,
           n_slides: slideCount,
           language: "English",
           template: "professional",
           export_as: "pptx",
-          tone: "professional",
-          density: "standard"
+          ...(gkey ? { google_api_key: gkey } : {})
         })
       });
 
@@ -750,6 +756,20 @@ Return ONLY the prompt. No explanation. No quotes.`,
     </div>
 
     <div style={{maxWidth:720,margin:"20px auto 0",padding:"0 16px"}}>
+
+      {/* ── WHATSAPP QUICK ACCESS — top of page ── */}
+      <a href={"https://wa.me/"+WHATSAPP_NUMBER+"?text=hi"} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none",display:"block",marginBottom:16}}>
+        <div style={{background:"linear-gradient(135deg,#075E54,#128C7E)",borderRadius:16,padding:"14px 20px",display:"flex",alignItems:"center",gap:14,cursor:"pointer",boxShadow:"0 4px 20px rgba(37,211,102,.25)",transition:"transform .2s"}}
+          onMouseOver={e=>e.currentTarget.style.transform="translateY(-2px)"}
+          onMouseOut={e=>e.currentTarget.style.transform="translateY(0)"}>
+          <div style={{width:44,height:44,borderRadius:12,background:"rgba(255,255,255,.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>💬</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:15,color:"#fff",fontFamily:"'Syne',sans-serif"}}>Use PostFlow AI on WhatsApp</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,.75)",marginTop:2}}>Text your idea → get polished post in seconds · No app needed</div>
+          </div>
+          <div style={{background:"#25D366",color:"#fff",borderRadius:50,padding:"8px 16px",fontSize:13,fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}}>Open Chat →</div>
+        </div>
+      </a>
 
       {/* API KEY — optional now */}
       <div style={cd}>
