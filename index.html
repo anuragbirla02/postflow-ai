@@ -559,9 +559,10 @@ Write compelling slide content. Return ONLY valid JSON:
           content: `LinkedIn carousel presentation about: ${topic}. ${slideDescriptions}`,
           n_slides: slideCount,
           language: "English",
-          template: "professional",
+          template: "general",
           export_as: "pptx",
-          ...(gkey ? { google_api_key: gkey } : {})
+          tone: "professional",
+          density: "standard"
         })
       });
 
