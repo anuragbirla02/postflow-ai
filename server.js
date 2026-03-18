@@ -1,17 +1,17 @@
 /**
  * PostFlow AI — WhatsApp Bot + AI Proxy
- * Fixed: multi-key rotation, gemini-2.5-flash, live mode webhook
+ * Supports BOTH Meta Business API + Twilio Sandbox
+ * Multi Gemini key rotation — gemini-2.5-flash
  */
 
 const express = require("express");
 const app = express();
 
-/* Raw body for webhook, JSON for everything else */
 app.use("/webhook", express.raw({ type: "*/*" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* ── CORS — all routes ── */
+/* ── CORS ── */
 app.use((req, res, next) => {
   const origin = req.headers.origin || "";
   const allowed = [
@@ -29,31 +29,34 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ── ENV ── */
+/* ══════════════════════════════════════════
+   ENV — set all in Railway Variables
+══════════════════════════════════════════ */
 const {
-  META_VERIFY_TOKEN    = "postflow_verify_2024",
+  META_VERIFY_TOKEN   = "postflow_verify_2024",
   META_ACCESS_TOKEN,
   META_PHONE_NUMBER_ID,
-  META_DISPLAY_NUMBER  = "Check Meta dashboard",
-  PORT                 = 3000,
-  RATE_LIMIT_PER_HOUR  = "20",
-  RATE_LIMIT_PER_DAY   = "50",
+  META_DISPLAY_NUMBER = "Not configured",
+  TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_WHATSAPP_FROM,
+  PORT                = 3000,
+  RATE_LIMIT_PER_HOUR = "20",
+  RATE_LIMIT_PER_DAY  = "50",
 } = process.env;
 
 /* ══════════════════════════════════════════
    MULTI-KEY ROTATION
-   Add keys in Railway Variables:
-   GEMINI_KEY   = AIzaSy...  (key 1)
-   GEMINI_KEY_1 = AIzaSy...  (key 2)
-   GEMINI_KEY_2 = AIzaSy...  (key 3)
-   GEMINI_KEY_3 = AIzaSy...  (key 4)
-   GEMINI_KEY_4 = AIzaSy...  (key 5)
-   Server rotates automatically. If one hits
-   rate limit, next key is tried instantly.
+   Railway Variables:
+   GEMINI_KEY   = AIzaSy... (key 1)
+   GEMINI_KEY_1 = AIzaSy... (key 2)
+   GEMINI_KEY_2 = AIzaSy... (key 3)
+   GEMINI_KEY_3 = AIzaSy... (key 4)
+   GEMINI_KEY_4 = AIzaSy... (key 5)
 ══════════════════════════════════════════ */
 function getKeys() {
   const keys = [];
-  if (process.env.GEMINI_KEY)   keys.push(process.env.GEMINI_KEY);
+  if (process.env.GEMINI_KEY) keys.push(process.env.GEMINI_KEY);
   for (let i = 1; i <= 20; i++) {
     const k = process.env[`GEMINI_KEY_${i}`];
     if (k) keys.push(k);
@@ -63,12 +66,12 @@ function getKeys() {
 let keyIdx = 0;
 function nextKey() {
   const keys = getKeys();
-  if (!keys.length) throw new Error("No Gemini API keys set in Railway Variables");
+  if (!keys.length) throw new Error("No Gemini API keys in Railway Variables");
   return keys[keyIdx++ % keys.length];
 }
 
 /* ══════════════════════════════════════════
-   GEMINI AI — gemini-2.5-flash always
+   GEMINI AI
 ══════════════════════════════════════════ */
 async function ai(prompt, retries = 3) {
   for (let i = 0; i < retries; i++) {
@@ -76,13 +79,17 @@ async function ai(prompt, retries = 3) {
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
-        { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.85, topP: 0.95 } }) }
+        { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.85, topP: 0.95 }
+          })
+        }
       );
       const d = await res.json();
       if (d.error?.status === "RESOURCE_EXHAUSTED" || d.error?.code === 429) {
-        console.warn(`⚠️ Key ${i+1} rate limited, trying next...`);
+        console.warn(`Key ${i+1} rate limited, trying next...`);
         continue;
       }
       if (d.error) throw new Error(d.error.message);
@@ -95,23 +102,46 @@ async function ai(prompt, retries = 3) {
 }
 
 /* ══════════════════════════════════════════
-   WHATSAPP SEND
+   SEND MESSAGE
+   platform = "meta" or "twilio"
 ══════════════════════════════════════════ */
-async function sendWA(to, text) {
-  if (!META_ACCESS_TOKEN || !META_PHONE_NUMBER_ID) {
-    console.error("❌ META_ACCESS_TOKEN or META_PHONE_NUMBER_ID not set!");
+async function send(to, text, platform) {
+  if (platform === "twilio") {
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_WHATSAPP_FROM) {
+      console.error("Twilio credentials not set"); return;
+    }
+    const toFmt = to.startsWith("whatsapp:") ? to : `whatsapp:${to}`;
+    const auth  = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+    const body  = new URLSearchParams({ From: TWILIO_WHATSAPP_FROM, To: toFmt, Body: text });
+    const res   = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
+      { method: "POST",
+        headers: { "Authorization": `Basic ${auth}`,
+          "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString()
+      }
+    );
+    const d = await res.json();
+    if (d.error_code) console.error("Twilio error:", d.error_message);
+    else console.log(`Twilio sent to ${to}`);
     return;
+  }
+  /* Meta */
+  if (!META_ACCESS_TOKEN || !META_PHONE_NUMBER_ID) {
+    console.error("Meta tokens not set"); return;
   }
   const res = await fetch(
     `https://graph.facebook.com/v19.0/${META_PHONE_NUMBER_ID}/messages`,
-    { method: "POST", headers: { "Content-Type": "application/json",
+    { method: "POST",
+      headers: { "Content-Type": "application/json",
         Authorization: `Bearer ${META_ACCESS_TOKEN}` },
-      body: JSON.stringify({ messaging_product: "whatsapp", to,
-        type: "text", text: { body: text } }) }
+      body: JSON.stringify({ messaging_product: "whatsapp",
+        to, type: "text", text: { body: text } })
+    }
   );
   const d = await res.json();
-  if (d.error) console.error("❌ WA send error:", JSON.stringify(d.error));
-  else console.log(`✅ Sent to ${to}`);
+  if (d.error) console.error("Meta error:", JSON.stringify(d.error));
+  else console.log(`Meta sent to ${to}`);
 }
 
 /* ══════════════════════════════════════════
@@ -152,204 +182,205 @@ const state = {};
 /* ══════════════════════════════════════════
    MESSAGE HANDLER
 ══════════════════════════════════════════ */
-async function handleMessage(from, text, rawText) {
+async function handleMessage(from, rawText, platform) {
   if (!state[from]) state[from] = { step: "new" };
-  const s = state[from];
-  console.log(`[${from}] step=${s.step} text="${text.slice(0,40)}"`);
+  const s   = state[from];
+  const txt = rawText.toLowerCase().trim();
+  console.log(`[${platform}][${from}] step=${s.step} msg="${rawText.slice(0,50)}"`);
 
-  /* ── NEW / RESTART ── */
-  if (s.step === "new" || ["hi","hello","start","hey"].includes(text)) {
+  /* NEW / RESTART */
+  if (s.step === "new" || ["hi","hello","start","hey"].includes(txt)) {
     s.step = "pick_tone";
-    await sendWA(from,
-      `⚡ *Welcome to PostFlow AI!*\n\nI turn your rough ideas into polished LinkedIn posts in seconds.\n\n*Pick your post format:*\n\n1️⃣ *Story* — Personal journey & lessons\n2️⃣ *Hot Take* — Bold opinion + data\n3️⃣ *List Post* — Actionable tips\n4️⃣ *Mistake* — Failure + lessons\n\nReply with 1, 2, 3 or 4\nOr just send your idea directly! 💡`
+    await send(from,
+      `⚡ *Welcome to PostFlow AI!*\n\nI turn your rough ideas into polished LinkedIn posts in seconds.\n\n*Pick your post format:*\n\n1️⃣ *Story* — Personal journey & lessons\n2️⃣ *Hot Take* — Bold opinion + data\n3️⃣ *List Post* — Actionable tips\n4️⃣ *Mistake* — Failure + lessons\n\nReply 1, 2, 3 or 4\nOr just send your idea directly! 💡`,
+      platform
     );
     return;
   }
 
-  /* ── PICK TONE ── */
+  /* PICK TONE */
   if (s.step === "pick_tone") {
-    const map = { "1":"story","2":"insight","3":"list","4":"mistake",
-      "story":"story","hot":"insight","take":"insight","list":"list","mistake":"mistake" };
-    const tone = map[text] || (rawText.length > 20 ? "story" : null);
+    const map = {
+      "1":"story","2":"insight","3":"list","4":"mistake",
+      "story":"story","hot":"insight","take":"insight",
+      "list":"list","mistake":"mistake","fail":"mistake"
+    };
+    const tone = map[txt] || (rawText.length > 20 ? "story" : null);
     if (tone) {
-      s.tone = tone;
-      s.step = "get_idea";
-      if (rawText.length > 20) {
-        /* They sent their idea directly — process it */
-        await processIdea(from, rawText);
-        return;
-      }
+      s.tone = tone; s.step = "get_idea";
+      if (rawText.length > 20) { await processIdea(from, rawText, platform); return; }
       const names = {story:"📖 Story",insight:"💡 Hot Take",list:"📋 List Post",mistake:"❌ Mistake"};
-      await sendWA(from,
-        `${names[tone]} selected ✅\n\nNow send me your idea!\n\nExamples:\n• "I grew LinkedIn to 5k in 90 days. Here's how"\n• "Cold outreach tip that got me 40% reply rate"\n• Bullet points you want expanded into a post`
+      await send(from,
+        `${names[tone]} selected ✅\n\nNow send me your idea!\n\nExamples:\n• "I grew LinkedIn to 5k in 90 days"\n• "Cold outreach tip that got me 40% reply rate"\n• Bullet points you want expanded into a post`,
+        platform
       );
     } else {
-      await sendWA(from, `Reply with:\n1️⃣ Story\n2️⃣ Hot Take\n3️⃣ List Post\n4️⃣ Mistake\n\nOr just send your idea directly!`);
+      await send(from,
+        `Reply with:\n1️⃣ Story\n2️⃣ Hot Take\n3️⃣ List Post\n4️⃣ Mistake\n\nOr just send your idea directly!`,
+        platform
+      );
     }
     return;
   }
 
-  /* ── GET IDEA → GENERATE ── */
+  /* GET IDEA */
   if (s.step === "get_idea") {
     if (rawText.length < 10) {
-      await sendWA(from, `Send me your idea — a sentence is enough! 💡`);
+      await send(from, `Send me your idea — a sentence is enough! 💡`, platform);
       return;
     }
-    await processIdea(from, rawText);
+    await processIdea(from, rawText, platform);
     return;
   }
 
-  /* ── POST DONE ── */
+  /* POST DONE */
   if (s.step === "done") {
-    if (text === "1" || text.includes("new")) {
+    if (txt === "1" || txt.includes("new")) {
       s.step = "new"; s.tone = null;
-      await handleMessage(from, "hi", "hi");
+      await handleMessage(from, "hi", platform);
       return;
     }
-    if (text === "2" || text.includes("change") || text.includes("redo")) {
+    if (txt === "2" || txt.includes("redo") || txt.includes("change")) {
       s.step = "get_idea";
-      await sendWA(from, `Send your idea again and I'll write a different version 🔄`);
+      await send(from, `Send your idea again and I'll write a different version 🔄`, platform);
       return;
     }
-    if (text === "3" || text.includes("image")) {
+    if (txt === "3" || txt.includes("image")) {
       const styles = {
-        story:   "warm cinematic golden hour, 35mm film grain, shallow depth of field, meaningful silhouette",
-        insight: "bold abstract, dramatic side lighting, dark background, electric color accent",
-        list:    "clean minimal flat lay, soft overhead light, editorial magazine style",
-        mistake: "moody chiaroscuro, lone figure, cinematic fog, contemplative atmosphere"
+        story:   "warm cinematic golden hour, 35mm film grain, shallow depth of field",
+        insight: "bold abstract composition, dramatic side lighting, dark background",
+        list:    "clean minimal flat lay, soft diffused overhead light, editorial style",
+        mistake: "moody chiaroscuro, lone figure at turning point, cinematic fog"
       };
       const style = styles[s.tone||"story"];
-      await sendWA(from,
-        `🎨 *AI Image Prompt for your cover:*\n\n_"${s.lastIdea||"professional LinkedIn"}: ${style}, deep navy and blue palette, no text, no watermark, ultra HD 4K, 16:9 landscape"_\n\nGenerate free at:\n🌸 *image.pollinations.ai*\n\nOr use PostFlow AI website for more AI models 🚀`
+      await send(from,
+        `🎨 *AI Image Prompt:*\n\n_"${s.lastIdea||"professional LinkedIn content"}: ${style}, deep navy and blue palette, no text, no watermark, ultra HD 4K, 16:9"_\n\nGenerate free at:\n🌸 *image.pollinations.ai*\n\nOr use the PostFlow AI website 🚀`,
+        platform
       );
       return;
     }
-    /* New idea sent directly */
     if (rawText.length > 15) {
       s.step = "get_idea";
-      await processIdea(from, rawText);
+      await processIdea(from, rawText, platform);
       return;
     }
-    await sendWA(from, `Reply *1* for new post, *2* to redo, *3* for image prompt\nOr just send a new idea! 💡`);
+    await send(from,
+      `Reply *1* for new post, *2* to redo, *3* for AI image prompt\nOr just send a new idea! 💡`,
+      platform
+    );
     return;
   }
 
-  /* ── GENERATING (prevent double) ── */
+  /* GENERATING */
   if (s.step === "generating") {
-    await sendWA(from, `⏳ Still writing your post... just a few seconds!`);
+    await send(from, `⏳ Still writing... a few more seconds!`, platform);
     return;
   }
 
   /* Fallback */
   s.step = "new";
-  await handleMessage(from, "hi", "hi");
+  await handleMessage(from, "hi", platform);
 }
 
-async function processIdea(from, rawText) {
+/* GENERATE POST */
+async function processIdea(from, rawText, platform) {
   const s = state[from];
   s.step = "generating";
   s.lastIdea = rawText;
-  await sendWA(from, `✍️ Writing your post...\n_~10 seconds_`);
+  await send(from, `✍️ Writing your LinkedIn post...\n_~10 seconds_`, platform);
+
   const tone = s.tone || "story";
   const toneGuide = {
-    story:   "Hook (bold claim not a question) → blank → 3-4 story lines (one idea per line) → blank → 'Here's what I learned:' → 3 numbered lessons → blank → CTA asking their story",
-    insight: "Controversial opener ≤10 words → blank → 'Here's what most miss:' → 3-4 argument lines → blank → counter-argument → rebuttal → blank → polarizing yes/no question",
-    list:    "'X things [audience] should do instead of [mistake]:' → blank → 5-7 numbered insights (Bold: explanation) → blank → 'Save this.'",
-    mistake: "Mistake stated upfront, no buildup → blank → what happened 2-3 lines → blank → 'The moment I realized:' → turning point → blank → 3 things you'd do differently → 'Still figuring it out.'"
+    story:   "Hook (bold claim, not a question) → blank line → 3-4 story lines (one idea per line) → blank line → 'Here's what I learned:' → 3 numbered lessons → blank line → CTA asking their story",
+    insight: "Controversial opener ≤10 words → blank line → 'Here's what most miss:' → 3-4 argument lines → blank line → counter + rebuttal → blank line → polarizing yes/no question",
+    list:    "'X things [audience] should do instead of [mistake]:' → blank line → 5-7 numbered insights (Bold: explanation) → blank line → 'Save this.'",
+    mistake: "Mistake stated upfront → blank line → what happened 2-3 specific lines → blank line → 'The moment I realized:' → turning point → blank line → 3 things you'd do differently → 'Still figuring it out.'"
   };
+
   try {
     const [post, tags] = await Promise.all([
       ai(`Write a LinkedIn post about: "${rawText}"\nFormat: ${toneGuide[tone]}\nRules: 150-220 words, first person, conversational, no em-dashes, no "excited to share", blank lines between sections\nReturn ONLY the post text.`),
-      ai(`5 LinkedIn hashtags for: "${rawText.slice(0,80)}". Return ONLY hashtags separated by spaces, nothing else.`)
+      ai(`Give 5 LinkedIn hashtags for: "${rawText.slice(0,80)}". Return ONLY hashtags separated by spaces.`)
     ]);
+
     s.lastPost = post;
     s.step = "done";
-    await sendWA(from,
-      `✅ *Your LinkedIn Post:*\n\n━━━━━━━━━━━━━━━\n\n${post}\n\n━━━━━━━━━━━━━━━\n\n*Hashtags:* ${tags.trim()}`
+
+    await send(from,
+      `✅ *Your LinkedIn Post:*\n\n━━━━━━━━━━━━━━━\n\n${post}\n\n━━━━━━━━━━━━━━━\n\n*Hashtags:* ${tags.trim()}`,
+      platform
     );
-    await new Promise(r => setTimeout(r, 800));
-    await sendWA(from,
-      `*What next?*\n\n1️⃣ New post\n2️⃣ Redo this post\n3️⃣ Get AI image prompt\n\nOr just send a new idea directly! 💡`
+    await new Promise(r => setTimeout(r, 1000));
+    await send(from,
+      `*What next?*\n\n1️⃣ New post\n2️⃣ Redo this post\n3️⃣ Get AI image prompt\n\nOr send a new idea directly! 💡`,
+      platform
     );
   } catch(err) {
     console.error("Generation error:", err.message);
     s.step = "get_idea";
-    await sendWA(from, `❌ ${err.message}\n\nPlease try again!`);
+    await send(from, `❌ ${err.message}\n\nPlease try again!`, platform);
   }
 }
 
 /* ══════════════════════════════════════════
-   WEBHOOK — VERIFY (GET)
+   META WEBHOOK
 ══════════════════════════════════════════ */
 app.get("/webhook", (req, res) => {
   const mode  = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const chal  = req.query["hub.challenge"];
-  console.log(`🔍 Webhook verify: mode=${mode} token=${token}`);
   if (mode === "subscribe" && token === META_VERIFY_TOKEN) {
-    console.log("✅ Webhook verified!");
+    console.log("Meta webhook verified!");
     return res.status(200).send(chal);
   }
-  console.error("❌ Verify failed! Expected:", META_VERIFY_TOKEN, "Got:", token);
   res.sendStatus(403);
 });
 
-/* ══════════════════════════════════════════
-   WEBHOOK — RECEIVE MESSAGES (POST)
-══════════════════════════════════════════ */
 app.post("/webhook", async (req, res) => {
-  /* Respond 200 immediately — Meta requires within 5s */
   res.sendStatus(200);
   try {
-    /* Parse body — may come as Buffer due to raw middleware */
     let body = req.body;
     if (Buffer.isBuffer(body)) body = JSON.parse(body.toString());
-
-    /* Log EVERYTHING for debugging */
-    console.log("📨 Webhook received:", JSON.stringify(body).slice(0, 500));
-
-    if (body.object !== "whatsapp_business_account") {
-      console.log("⚠️ Not a whatsapp_business_account object:", body.object);
-      return;
-    }
-
-    const entry   = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value   = changes?.value;
-
-    console.log("📋 Changes field:", changes?.field);
-    console.log("📋 Value type:", value?.messaging_product);
-
-    const messages = value?.messages;
-    if (!messages?.length) {
-      /* Could be a status update — ignore silently */
-      console.log("ℹ️ No messages in webhook (status update or other)");
-      return;
-    }
-
-    const msg  = messages[0];
+    if (body.object !== "whatsapp_business_account") return;
+    const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
+    if (!messages?.length) return;
+    const msg = messages[0];
     const from = msg.from;
-    console.log(`📱 Message from: ${from} | Type: ${msg.type}`);
-
     let rawText = "";
-    if (msg.type === "text")        rawText = msg.text?.body || "";
+    if (msg.type === "text") rawText = msg.text?.body || "";
     else if (msg.type === "interactive") rawText = msg.interactive?.button_reply?.title || "";
-    else {
-      await sendWA(from, "Please send a text message 💬");
-      return;
-    }
-
+    else { await send(from, "Please send a text message 💬", "meta"); return; }
     if (!rawText.trim()) return;
-    console.log(`💬 Processing: "${rawText.slice(0,60)}" from ${from}`);
-    await handleMessage(from, rawText.toLowerCase().trim(), rawText.trim());
-
+    console.log(`Meta msg from ${from}: "${rawText.slice(0,60)}"`);
+    await handleMessage(from, rawText.trim(), "meta");
   } catch(err) {
-    console.error("❌ Webhook error:", err.message, err.stack?.slice(0,300));
+    console.error("Meta webhook error:", err.message);
   }
 });
 
 /* ══════════════════════════════════════════
-   AI PROXY — Free tier for frontend
+   TWILIO WEBHOOK
+   Setup in Twilio Console:
+   Messaging → Sandbox → "When a message comes in"
+   URL: https://YOUR-RAILWAY-URL.railway.app/twilio
+   Method: HTTP POST
+══════════════════════════════════════════ */
+app.post("/twilio", async (req, res) => {
+  res.set("Content-Type", "text/xml");
+  res.send("<Response></Response>");
+  try {
+    const from    = req.body.From || "";
+    const rawText = req.body.Body || "";
+    if (!from || !rawText.trim()) return;
+    console.log(`Twilio msg from ${from}: "${rawText.slice(0,60)}"`);
+    await handleMessage(from, rawText.trim(), "twilio");
+  } catch(err) {
+    console.error("Twilio webhook error:", err.message);
+  }
+});
+
+/* ══════════════════════════════════════════
+   AI PROXY
 ══════════════════════════════════════════ */
 app.post("/api/ai", async (req, res) => {
   const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
@@ -365,7 +396,6 @@ app.post("/api/ai", async (req, res) => {
     const text = await ai(prompt);
     res.json({ text });
   } catch(err) {
-    console.error("AI proxy error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -379,38 +409,48 @@ app.post("/register", async (req, res) => {
   let clean = phone.replace(/[\s\-\(\)]/g, "");
   if (!clean.startsWith("91")) clean = "91" + clean.replace("+91","").replace("+","");
   state[clean] = { step: "new", name };
-  res.json({ success: true, bot_number: META_DISPLAY_NUMBER,
-    instruction: `Hi ${name}! Open WhatsApp and send "hi" to ${META_DISPLAY_NUMBER}` });
+  const twilioNum = TWILIO_WHATSAPP_FROM?.replace("whatsapp:","") || "";
+  const metaNum   = META_DISPLAY_NUMBER || "";
+  res.json({
+    success: true,
+    twilio_number: twilioNum,
+    meta_number:   metaNum,
+    instruction:   `Hi ${name}! Open WhatsApp and send "hi" to ${twilioNum || metaNum}`
+  });
 });
 
 /* ══════════════════════════════════════════
-   USAGE + HEALTH
+   HEALTH
 ══════════════════════════════════════════ */
 app.get("/api/usage", (req, res) => {
   const keys = getKeys();
   res.json({
     status: "running",
-    gemini_keys_loaded: keys.length,
-    key_index: keyIdx % (keys.length || 1),
+    keys_loaded: keys.length,
+    key_index: keyIdx % (keys.length||1),
     rate_limits: { per_hour: RL_H, per_day: RL_D },
-    active_ips: Object.keys(rl).length,
-    whatsapp_users: Object.keys(state).length
+    whatsapp_users: Object.keys(state).length,
+    platforms: {
+      meta:   META_ACCESS_TOKEN   ? "configured" : "not set",
+      twilio: TWILIO_ACCOUNT_SID  ? "configured" : "not set"
+    }
   });
 });
 
 app.get("/", (req, res) => res.json({
-  status: "✅ PostFlow AI running",
-  keys: getKeys().length + " Gemini keys loaded",
-  model: "gemini-2.5-flash",
-  whatsapp_users: Object.keys(state).length,
-  time: new Date().toISOString()
+  status: "PostFlow AI running",
+  model:  "gemini-2.5-flash",
+  keys:   getKeys().length,
+  users:  Object.keys(state).length,
+  endpoints: ["/webhook", "/twilio", "/api/ai", "/register", "/api/usage"],
+  time:   new Date().toISOString()
 }));
 
 app.listen(PORT, () => {
   const keys = getKeys();
-  console.log(`⚡ PostFlow AI running on port ${PORT}`);
-  console.log(`🔑 ${keys.length} Gemini key(s) loaded`);
-  console.log(`📱 Webhook: /webhook | AI Proxy: /api/ai`);
-  if (!META_ACCESS_TOKEN) console.warn("⚠️ META_ACCESS_TOKEN not set — WhatsApp won't send messages");
-  if (!keys.length) console.warn("⚠️ No GEMINI_KEY set — AI proxy won't work");
+  console.log(`PostFlow AI running on port ${PORT}`);
+  console.log(`${keys.length} Gemini key(s) loaded`);
+  if (!keys.length)        console.warn("No GEMINI_KEY set!");
+  if (!META_ACCESS_TOKEN)  console.warn("META_ACCESS_TOKEN not set");
+  if (!TWILIO_ACCOUNT_SID) console.warn("TWILIO credentials not set (Twilio disabled)");
 });
