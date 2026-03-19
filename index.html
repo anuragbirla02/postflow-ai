@@ -184,15 +184,16 @@ ${midSpec},
 }
 
 function imgAutoPrompt(topic,tone){
+  /* Professional informational LinkedIn cover — NOT cinematic */
   const styles={
-    story:"cinematic portrait, warm golden hour light, film grain, 35mm bokeh",
-    insight:"abstract editorial, dramatic chiaroscuro, bold contrast, conceptual",
-    list:"clean flat lay, soft diffused light, minimal organized composition",
-    question:"split dual worlds, dramatic lighting, conceptual contrast art",
-    data:"futuristic data streams, neon nodes, dark navy, electric blue glow",
-    mistake:"moody turning point, lone silhouette, cinematic low key"
+    story:   "professional infographic layout, clean white background, bold typography hierarchy, timeline or journey visualization, flat design icons, LinkedIn blue #0A66C2 and dark navy #0A0F1E accent colors",
+    insight: "data dashboard visualization, dark navy #0D1117 background, glowing bar charts or pie charts with electric blue #38BDF8 highlights, bold percentage stats overlaid, modern tech infographic style",
+    list:    "clean minimal checklist infographic, white background, numbered steps with colored icon badges, professional flat design, LinkedIn blue accents, organized grid layout",
+    question:"split comparison infographic, two columns YES vs NO or BEFORE vs AFTER, clean dividing line, contrasting colors, professional presentation slide style, data-driven",
+    data:    "data visualization dashboard, dark background, multiple glowing charts — bar graph, trend line, pie chart, key statistics in large bold text, Bloomberg terminal aesthetic, professional financial report style",
+    mistake: "before and after comparison infographic, red warning indicators on left panel, green success metrics on right panel, clean flat design, professional business report layout"
   };
-  return `${topic}: ${styles[tone]||styles.story}, no text, no watermark, ultra HD 4K, professional LinkedIn cover, 16:9`;
+  return `Professional LinkedIn infographic about: "${topic}". Style: ${styles[tone]||styles.story}. Highly detailed, sharp edges, no blur, ultra HD 4K, 16:9 landscape, no watermark, no person faces, data-rich professional cover image.`;
 }
 
 function schedPrompt(topic,domain){
@@ -228,7 +229,7 @@ async function buildPPT(slides,title,themeId){
   for(let i=0;i<slides.length;i++){
     const s=slides[i];
     const sl=p.addSlide();
-    const lay=s.layout||(i===0?"cover":i===slides.length-1?"cta":"stat");
+    const lay=s.layout||s.type||(i===0?"cover":i===slides.length-1?"cta":"stat");
 
     /* ─── COVER ─── */
     if(lay==="cover"){
@@ -517,94 +518,99 @@ function Tool({onHome}){
   }
 
   async function genPPT(){
-    sb("ppt",true); sm("ppt","🤖 Presenton AI designing your slides...");
+    sb("ppt",true);
+    const topic = picked?.title || idea.slice(0,60) || "LinkedIn Insights";
     try{
-      const topic = picked?.title || idea.slice(0,60) || "LinkedIn Insights";
-
-      /* Step 1 — Ask Gemini to write the slide content */
+      /* ── STEP 1: AI writes structured slide content ── */
       sm("ppt","✍️ AI writing slide content...");
       const contentPrompt = `Create a ${slideCount}-slide LinkedIn carousel about: "${topic}"
-${post ? `Based on this post:\n"${post.slice(0,400)}"` : ""}
-
-Write compelling slide content. Return ONLY valid JSON:
-{
-  "title": "catchy title max 8 words",
-  "slides": [
-    {"heading": "slide title", "content": "2-3 sentences of insight", "type": "title"},
-    {"heading": "slide title", "content": "key insight 2-3 sentences", "stat": "XX%", "type": "stat"},
-    {"heading": "slide title", "content": "actionable advice 2-3 sentences", "type": "tip"},
-    {"heading": "slide title", "content": "memorable principle 2-3 sentences", "quote": "short quotable phrase", "type": "quote"},
-    {"heading": "slide title", "content": "numbered insight 2-3 sentences", "type": "list", "items": ["point 1", "point 2", "point 3"]},
-    {"heading": "final takeaway", "content": "call to action 2-3 sentences", "type": "cta"}
-  ]
-}`;
+${post?`Based on this post:\n"${post.slice(0,400)}"`:""} 
+Return ONLY valid JSON:
+{"title":"catchy title ≤8 words","slides":[
+{"heading":"slide title","body":"2-3 sentences","type":"cover"},
+{"heading":"insight title","body":"key insight 2-3 sentences","stat":"XX%","statLabel":"what this means","type":"stat"},
+{"heading":"tip title","body":"actionable advice 2-3 sentences","tip":"pro tip 1-2 sentences","type":"tip"},
+{"heading":"principle","body":"expand 2-3 sentences","quote":"memorable phrase ≤12 words","type":"quote"},
+{"heading":"list title","body":"context 1-2 sentences","items":["point 1 ≤8 words","point 2","point 3","point 4"],"type":"list"},
+{"heading":"takeaway","body":"call to action 2-3 sentences","type":"cta"}
+]}`;
       const raw = await aiText(contentPrompt, key);
       const parsed = parseJSON(raw);
-      if(!parsed?.slides){ sm("ppt","⚠️ Could not parse slides. Retry."); sb("ppt",false); return; }
+      if(!parsed?.slides?.length){ sm("ppt","⚠️ Could not parse. Retry."); sb("ppt",false); return; }
       setPptSlides(parsed.slides);
 
-      /* Build slide descriptions for Presenton prompt */
-      const slideDescriptions = parsed.slides.map((s,i) =>
-        `Slide ${i+1}: ${s.heading}. ${s.content}${s.stat?" Key stat: "+s.stat:""}${s.quote?" Quote: "+s.quote:""}${s.items?" Points: "+s.items.join(", "):""}`
-      ).join(". ");
-
-      /* Step 2 — Presenton API */
-      sm("ppt","🎨 Presenton AI designing your slides...");
-
-      /* Presenton needs the Google API key to call Gemini for generation */
-      const gkey = key && key.trim().length > 10 ? key.trim() : "";
-
-      const presentonRes = await fetch(PRESENTON_URL + "/api/v1/ppt/presentation/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: `LinkedIn carousel about: ${topic}. ${slideDescriptions}`,
-          n_slides: slideCount,
-          language: "English",
-          export_as: "pptx"
-        })
-      });
-
-      if(!presentonRes.ok){
-        const errText = await presentonRes.text();
-        throw new Error("Presenton error " + presentonRes.status + ": " + errText.slice(0,150));
-      }
-
-      const presentonData = await presentonRes.json();
-      console.log("Presenton response:", JSON.stringify(presentonData).slice(0,300));
-
-      /* Response has path field — prepend server URL to get download link */
-      const rawPath = presentonData.path || presentonData.download_url || presentonData.url;
-      if(!rawPath) throw new Error("Presenton gave no file path. Response: " + JSON.stringify(presentonData).slice(0,100));
-
-      const pptUrl = rawPath.startsWith("http") ? rawPath : PRESENTON_URL + rawPath;
-      setPptBlob(pptUrl);
-      sm("ppt","✅ AI slides ready! Click Download to open.");
-
-      /* Build carousel text for copy */
-      const ctxt = parsed.slides.map((s,i) =>
-        `SLIDE ${i+1}\n${s.heading}\n${s.content}${s.stat?"\n📊 "+s.stat:""}${s.items?"\n"+s.items.map((it,ii)=>`${ii+1}. ${it}`).join("\n"):""}`
+      /* Build carousel copy text */
+      const ctxt = parsed.slides.map((s,i)=>
+        `SLIDE ${i+1} — ${(s.type||"").toUpperCase()}\n${s.heading}\n${s.body||""}${s.stat?"\n📊 "+s.stat+" — "+s.statLabel:""}${s.tip?"\n💡 "+s.tip:""}${s.items?"\n"+s.items.map((it,ii)=>`${ii+1}. ${it}`).join("\n"):""}`
       ).join("\n\n---\n\n");
       setCarouselText(ctxt);
 
+      /* ── STEP 2: Try Presenton first ── */
+      sm("ppt","🎨 Presenton AI designing slides... (~30s)");
+      let presenton_ok = false;
+      try{
+        const slideText = parsed.slides.map((s,i)=>
+          `${s.heading}: ${s.body||""}${s.stat?" Stat: "+s.stat:""}${s.tip?" Tip: "+s.tip:""}${s.items?" Points: "+s.items.join(", "):""}`
+        ).join(". ");
+
+        /* Correct Presenton API: JSON body, Content-Type application/json */
+        const pRes = await fetch(PRESENTON_URL+"/api/v1/ppt/presentation/generate",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            content:`LinkedIn carousel about ${topic}: ${slideText}`,
+            n_slides:slideCount,
+            language:"English",
+            template:"general",
+            export_as:"pptx",
+            tone:"professional"
+          })
+        });
+        if(pRes.ok){
+          const pData = await pRes.json();
+          console.log("Presenton:", JSON.stringify(pData).slice(0,200));
+          /* path is relative e.g. /static/user_data/xxx/file.pptx — prepend server URL */
+          const rawPath = pData.path||pData.download_url||pData.url||"";
+          if(rawPath){
+            const pptUrl = rawPath.startsWith("http") ? rawPath : PRESENTON_URL+rawPath;
+            setPptBlob(pptUrl);
+            sm("ppt","✅ Presenton slides ready! Click Download.");
+            presenton_ok = true;
+          }
+        } else {
+          const err = await pRes.text();
+          console.warn("Presenton failed:",pRes.status, err.slice(0,100));
+        }
+      }catch(pErr){
+        console.warn("Presenton error:",pErr.message);
+      }
+
+      /* ── STEP 3: PptxGenJS fallback if Presenton failed ── */
+      if(!presenton_ok){
+        sm("ppt","📊 Building premium slides (offline fallback)...");
+        const blob = await buildPPT(parsed.slides, parsed.title||topic, pptTheme);
+        setPptBlob(blob);
+        sm("ppt","✅ Premium slides ready! Click Download.");
+      }
+
     }catch(e){
       sm("ppt","❌ "+e.message);
-      console.error("PPT error:", e);
+      console.error("PPT error:",e);
     }
     sb("ppt",false);
   }
 
   function dlPPT(){
     if(!pptBlob) return;
-    /* pptBlob is now a URL string from Presenton */
-    if(typeof pptBlob === "string" && pptBlob.startsWith("http")){
-      window.open(pptBlob, "_blank");
-    } else if(pptBlob instanceof Blob){
-      /* fallback blob */
+    if(typeof pptBlob==="string"){
+      /* Presenton URL — open in new tab */
+      window.open(pptBlob,"_blank");
+    } else {
+      /* PptxGenJS Blob — direct download */
       const url = URL.createObjectURL(pptBlob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = ((picked?.title||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";
+      a.download = ((picked?.title||topic||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -617,28 +623,29 @@ Write compelling slide content. Return ONLY valid JSON:
     try{
       const topic = picked?.title || idea.slice(0,60) || "professional content";
       const toneVisuals = {
-        story:    "warm cinematic scene, golden hour light, 35mm film look, shallow depth of field, one person silhouette or empty meaningful space",
-        insight:  "bold abstract composition, dramatic side lighting, dark background, sharp geometric shapes, electric color accent",
-        list:     "clean minimal flat lay, soft overhead diffused light, white or light grey background, organized objects, editorial magazine style",
-        question: "two contrasting worlds split composition, dramatic lighting divide, thought-provoking visual tension",
-        data:     "dark navy background, glowing data network nodes, electric blue light trails, futuristic tech aesthetic, depth and dimension",
-        mistake:  "lone figure at turning point, moody chiaroscuro lighting, fog or mist, cinematic widescreen, contemplative atmosphere"
+        story:    "professional timeline infographic, clean white background, journey visualization with milestone markers, flat design icons, LinkedIn blue #0A66C2 accents, organized grid layout",
+        insight:  "data dashboard on dark navy #0D1117, glowing bar charts with electric blue #38BDF8 highlights, bold stat numbers like 73% and 5x, Bloomberg terminal aesthetic, crisp sharp edges",
+        list:     "numbered steps checklist infographic, white or light grey background, colored badge icons for each step, professional flat design, clean typography hierarchy, LinkedIn blue accents",
+        question: "split comparison layout, two clear columns with contrasting colors, YES vs NO or OPTION A vs OPTION B, clean dividing line, professional presentation slide aesthetic",
+        data:     "multi-chart dashboard, dark background, bar graph + trend line + pie chart combination, large bold KPI numbers, glowing data points, professional financial report / Bloomberg style",
+        mistake:  "before vs after comparison infographic, red warning panel on left with problem stats, green success panel on right with solution metrics, clean flat business design"
       };
       const visual = toneVisuals[tone] || toneVisuals.story;
       const p = await aiText(
-        `You are a professional art director creating LinkedIn cover images.
+        `You are a professional LinkedIn content designer creating informational cover images.
 
 Topic: "${topic}"
-Visual style needed: ${visual}
+Required style: ${visual}
 
-Write a detailed image generation prompt (3-4 sentences) that:
-1. Describes the EXACT visual scene, not the topic
-2. Specifies lighting (e.g. "soft side lighting from left", "dramatic chiaroscuro")
-3. Specifies color palette (e.g. "deep navy #0A0F1E with electric cyan accents")
-4. Specifies camera/composition (e.g. "wide angle, rule of thirds, shallow DOF")
-5. Ends with: "No text, no words, no watermark, ultra HD 4K, 16:9 landscape, professional photography"
+Write a detailed AI image generation prompt (3-4 sentences) for a PROFESSIONAL INFORMATIONAL image that:
+1. Describes specific data/visual elements (charts, stats, diagrams, icons, infographic layout)
+2. Specifies exact color palette with hex codes (e.g. "dark navy #0D1117 background with LinkedIn blue #0A66C2 accents")
+3. Specifies layout and composition (e.g. "3-column grid layout", "left stat panel + right chart", "centered hero stat with surrounding data points")
+4. Can include placeholder data/numbers as visual elements (e.g. "bold 87% in giant white text", "bar chart showing growth trend")
+5. Ends with: "Ultra HD 4K, 16:9 landscape, sharp edges, no blur, no watermark, no real text, professional LinkedIn infographic style"
 
-Return ONLY the prompt. No explanation. No quotes.`,
+This is NOT a photograph. It is a professional infographic/data visualization/business graphic.
+Return ONLY the prompt. No explanation. No quotes around it.`,
         key, true
       );
       setImgPrompt(p.trim());
@@ -995,11 +1002,11 @@ Return ONLY the prompt. No explanation. No quotes.`,
             {pptSlides.map((s,i)=>{
               const C=(PPT_THEMES.find(x=>x.id===pptTheme)||PPT_THEMES[0]).c;
               const isT=i===0,isL=i===pptSlides.length-1;
-              const li={cover:"📌",stat:"📊",tip:"💡",quote:"💬",list:"📋",highlight:"⭐",cta:"🎯"}[s.layout]||"📊";
+              const li={cover:"📌",stat:"📊",tip:"💡",quote:"💬",list:"📋",highlight:"⭐",cta:"🎯"}[s.layout||s.type]||"📊";
               return <div key={i} style={{border:"1px solid #E2E8F0",borderRadius:12,overflow:"hidden",background:isT||isL?"#"+C.bg:"#fff"}}>
                 <div style={{background:"#"+C.acc,height:4}}/>
                 <div style={{padding:"10px 12px"}}>
-                  <div style={{fontSize:9,color:isT||isL?"#"+C.acc:"#"+C.brd,fontWeight:800,marginBottom:4,textTransform:"uppercase"}}>{li} {s.layout?.toUpperCase()}</div>
+                  <div style={{fontSize:9,color:isT||isL?"#"+C.acc:"#"+C.brd,fontWeight:800,marginBottom:4,textTransform:"uppercase"}}>{li} {(s.layout||s.type||"slide").toUpperCase()}</div>
                   <div style={{fontWeight:700,fontSize:11,color:isT||isL?"#F0F4FF":"#0F172A",lineHeight:1.3,marginBottom:4}}>{s.heading}</div>
                   <div style={{fontSize:10,color:"#94A3B8"}}>{(s.body||s.quote||"").slice(0,55)}{(s.body||s.quote||"").length>55?"…":""}</div>
                   {s.stat&&<div style={{marginTop:5,fontSize:14,fontWeight:900,color:"#"+C.acc}}>{s.stat}</div>}
@@ -1042,7 +1049,7 @@ Return ONLY the prompt. No explanation. No quotes.`,
               <button style={{...bO,fontSize:11,padding:"5px 12px",opacity:busy.imgP?0.5:1}} onClick={autoImgPrompt} disabled={busy.imgP}>{busy.imgP?<><Spin c="#2563EB"/>Writing...</>:"✨ AI Auto-Write"}</button>
             </div>
             <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} className="if"
-              placeholder="e.g. 'Dark navy background, glowing neural network nodes, electric blue light rays, cinematic depth of field, no text, ultra HD 4K'"
+              placeholder="e.g. 'Dark navy #0D1117 background, glowing bar chart showing 73% growth in LinkedIn blue #0A66C2, bold KPI numbers, 3-column data grid layout, Bloomberg terminal style, ultra HD 4K, 16:9, no watermark'"
               style={{...ta,minHeight:80,background:"#FAFCFF",border:"1.5px solid #BFDBFE"}}/>
             <p style={{margin:"6px 0 0",fontSize:11,color:"#94A3B8"}}>💡 More specific = better. Include: lighting style, mood, colors, no text/watermark</p>
           </div>
