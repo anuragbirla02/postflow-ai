@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -568,14 +569,24 @@ Return ONLY valid JSON:
         });
         if(pRes.ok){
           const pData = await pRes.json();
-          console.log("Presenton:", JSON.stringify(pData).slice(0,200));
-          /* path is relative e.g. /static/user_data/xxx/file.pptx — prepend server URL */
-          const rawPath = pData.path||pData.download_url||pData.url||"";
-          if(rawPath){
-            const pptUrl = rawPath.startsWith("http") ? rawPath : PRESENTON_URL+rawPath;
-            setPptBlob(pptUrl);
-            sm("ppt","✅ Presenton slides ready! Click Download.");
-            presenton_ok = true;
+          console.log("Presenton response:", JSON.stringify(pData).slice(0,300));
+          /* path = "/static/user_data/uuid/file.pptx" — THE actual PPTX
+             edit_path = "/presentation?id=uuid" — HTML editor, DO NOT use */
+          const rawPath = pData.path || "";
+          if(rawPath && (rawPath.endsWith(".pptx") || rawPath.endsWith(".pdf"))){
+            const fileUrl = rawPath.startsWith("http") ? rawPath : PRESENTON_URL + rawPath;
+            sm("ppt","📥 Fetching your slides...");
+            const fileRes = await fetch(fileUrl);
+            if(fileRes.ok){
+              const fileBlob = await fileRes.blob();
+              setPptBlob(fileBlob); /* store as Blob so dlPPT downloads directly */
+              sm("ppt","✅ Presenton slides ready! Click Download.");
+              presenton_ok = true;
+            } else {
+              console.warn("File fetch failed:", fileRes.status);
+            }
+          } else {
+            console.warn("Unexpected path from Presenton:", rawPath, JSON.stringify(pData));
           }
         } else {
           const err = await pRes.text();
