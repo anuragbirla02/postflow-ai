@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -578,8 +577,12 @@ Return ONLY valid JSON:
             sm("ppt","📥 Fetching your slides...");
             const fileRes = await fetch(fileUrl);
             if(fileRes.ok){
-              const fileBlob = await fileRes.blob();
-              setPptBlob(fileBlob); /* store as Blob so dlPPT downloads directly */
+              /* Force correct MIME type — prevents phone treating it as ZIP */
+              const fileBytes = await fileRes.arrayBuffer();
+              const fileBlob = new Blob([fileBytes], {
+                type: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+              });
+              setPptBlob(fileBlob);
               sm("ppt","✅ Presenton slides ready! Click Download.");
               presenton_ok = true;
             } else {
@@ -613,17 +616,20 @@ Return ONLY valid JSON:
 
   function dlPPT(){
     if(!pptBlob) return;
-    if(typeof pptBlob==="string"){
-      /* Presenton URL — open in new tab */
-      window.open(pptBlob,"_blank");
-    } else {
-      /* PptxGenJS Blob — direct download */
+    const fname = ((picked?.title||idea||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";
+    if(pptBlob instanceof Blob){
+      /* Force download with correct filename and MIME type */
       const url = URL.createObjectURL(pptBlob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = ((picked?.title||topic||"carousel").slice(0,40).replace(/[^a-z0-9]/gi,"-"))+".pptx";
+      a.download = fname;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    } else if(typeof pptBlob==="string"){
+      /* Fallback — open URL directly */
+      window.open(pptBlob,"_blank");
     }
   }
 
